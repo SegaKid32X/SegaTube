@@ -104,6 +104,7 @@ typedef struct {
 } rec_t;
 
 static int chunk_left;              /* records left in this chunk; 0: a chunk header next */
+static int chunk_first;             /* the next record is a chunk's first (intra pictures) */
 static uint32_t rec_frame;          /* frame of the next record */
 static int bad_stream;
 
@@ -125,6 +126,7 @@ static int peek_record(rec_t *r)
             return 0;
         }
         chunk_left = rd16(c + 12);
+        chunk_first = 1;
         rec_frame = rd32(c + 8);
         stream_consume(sizeof(stv_chunk_header));
         if (!chunk_left)
@@ -170,6 +172,7 @@ static void drop_record(rec_t *r)
     stream_hold(0);
     stream_consume(r->size);
     chunk_left--;
+    chunk_first = 0;
     rec_frame++;
 }
 
@@ -259,8 +262,33 @@ static void slave_decode(int arg)
 static uint16_t palette[256];
 static int decode_errors;
 
-/* Decode a picture into the buffer the SH-2 reaches now. */
+/* ---- stats (Y while watching): where the time goes ---- */
+#define FRT_TCR     (*(volatile uint8_t *)0xFFFFFE16)
+#define FRT_FRCH    (*(volatile uint8_t *)0xFFFFFE12)
+#define FRT_FRCL    (*(volatile uint8_t *)0xFFFFFE13)
+static uint16_t frt(void)              /* 5.56 us ticks (clock / 128) */
+{
+    uint8_t h = FRT_FRCH;
+    return (uint16_t)(h << 8 | FRT_FRCL);
+}
+static int stats_on;
+static uint32_t st_dec_sum, st_dec_n, st_dec_max, st_skipped, st_vbl, st_fetched0;
+static uint32_t st_q_min = 0xFFFFFFFFu;
+
+static void decode_picture_(const uint8_t *pic);
+
+/* Decode a picture into the buffer the SH-2 reaches now (timed). */
 static void decode_picture(const uint8_t *pic)
+{
+    uint16_t t0 = frt();
+    decode_picture_(pic);
+    uint32_t d = (uint16_t)(frt() - t0);
+    st_dec_sum += d;
+    st_dec_n++;
+    if (d > st_dec_max) st_dec_max = d;
+}
+
+static void decode_picture_(const uint8_t *pic)
 {
     uint32_t psize = rd32(pic + 4);
     int flags = pic[1], parts = pic[2];
@@ -610,7 +638,11 @@ static int handle_keys(int *seek_to)
     uint16_t p = pad_pressed;
     if (!p) return ACT_NONE;
     if (p & PAD_B) return ACT_BACK;
-    if (p & (PAD_C | PAD_Y)) return ACT_MODE;
+    if (p & PAD_C) return ACT_MODE;
+    if (p & PAD_Y) {
+        stats_on = !stats_on;
+        if (!stats_on) ui_cmd(CMD_STATS, 0x8000, 0, 0);     /* away */
+    }
     if (p & PAD_START) {
         paused = !paused;
         audio_pause(paused);
@@ -644,10 +676,39 @@ static int handle_keys(int *seek_to)
 
 /* ---- playing ---- */
 
+/* Once a second while the stats are on: two lines at the top */
+static void stats_tick(void)
+{
+    uint32_t q = audio_queued();
+    if (q < st_q_min) st_q_min = q;
+    uint16_t v = hw_vblanks();
+    if ((uint16_t)(v - st_vbl) < 60) return;
+    uint32_t secs_vbl = (uint16_t)(v - st_vbl);
+    st_vbl = v;
+    uint32_t fetched = stream_fetched();
+    uint32_t kbs = (fetched - st_fetched0) * 60 / secs_vbl / 1024;
+    st_fetched0 = fetched;
+    if (stats_on) {
+        /* tick = 128 / 23.01 MHz: ms x 10 = ticks x 1280 / 23011 */
+        uint32_t avg = st_dec_n ? st_dec_sum / st_dec_n : 0;
+        uint32_t avg10 = avg * 1280 / 23011, max10 = st_dec_max * 1280 / 23011;
+        uint32_t qms = st_q_min == 0xFFFFFFFFu ? 0 : st_q_min * 1000 / (mv.rate ? mv.rate : 1);
+        uint32_t frame10 = mv.fps_num ? 10000u * mv.fps_den / mv.fps_num : 0;
+        ui_cmd(CMD_STATS, (uint16_t)(avg10 > 0x7FFF ? 0x7FFF : avg10),
+               (uint16_t)(max10 > 0xFFFF ? 0xFFFF : max10), (uint16_t)frame10);
+        ui_cmd(CMD_STATS, (uint16_t)(0x4000 | (kbs > 0x3FFF ? 0x3FFF : kbs)),
+               (uint16_t)(stream_avail() / 1024 | (qms / 2 > 255 ? 255 : qms / 2) << 8),
+               (uint16_t)((audio_underruns() > 255 ? 255 : audio_underruns()) << 8 |
+                          (st_skipped > 255 ? 255 : st_skipped)));
+    }
+    st_dec_sum = st_dec_n = st_dec_max = 0;
+    st_q_min = 0xFFFFFFFFu;
+}
+
 static int play_from(int c)
 {
     start_at(c);
-    int have_next = 0, first = 1;
+    int have_next = 0, first = 1, skipping = 0;
     uint32_t next_frame = 0;
     const uint16_t *next_pal = 0;
     uint32_t half_vbl = mv.rate / 120;
@@ -666,10 +727,22 @@ static int play_from(int c)
         if (osd_timer == -2) { osd_hide(); osd_timer = 0; }
         else if (osd_timer != 0) show_osd_now(osd_timer < 0 ? OSD_HINTS : 0);
 
+        stats_tick();
         if (!have_next) {
             rec_t r;
             if (peek_record(&r)) {
+                /* Falling behind (the sound is about to run dry): keep the
+                 * sound going and skip pictures up to the next chunk's
+                 * intra pictures (the picture holds for a moment). */
+                if (chunk_first) skipping = 0;
+                else if (!first && !paused && mv.rate && audio_queued() < mv.rate / 8)
+                    skipping = 1;
                 record_audio(&r);
+                if (skipping) {
+                    drop_record(&r);
+                    st_skipped++;
+                    continue;
+                }
                 decode_picture(r.pic[0]);
                 next_pal = r.palette ? palette : 0;
                 next_frame = r.frame;
@@ -708,6 +781,8 @@ static int play_from(int c)
 int play_movie(int m, int kind)
 {
     cur_movie = m;
+    FRT_TCR = 0x02;                     /* the free-running timer: clock / 128 */
+    st_skipped = 0;
     have_info = info_read(m, &inf) == 0;
     if (kind != KIND_FILM && kind != KIND_FULL) kind = KIND_FILM;
     if (!has_kind(kind)) kind = next_kind(kind);

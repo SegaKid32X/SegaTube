@@ -25,6 +25,9 @@ shot help_still
 press c 6
 run 30
 shot playing_again
+press y 6
+run 75
+shot stats
 press b 6
 run 60
 shot back_library

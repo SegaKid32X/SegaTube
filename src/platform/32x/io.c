@@ -216,6 +216,12 @@ static int s_cpart;
 static int s_state;                 /* 0 idle, 1 reading (68000), 2 copying (DMA) */
 static uint32_t s_n;
 static int s_stop, s_err, s_hold;
+static uint32_t s_fetched;          /* bytes brought in, ever (stats) */
+
+uint32_t stream_fetched(void)
+{
+    return s_fetched;
+}
 
 #define S_IDLE 0
 #define S_READ 1
@@ -311,6 +317,7 @@ void stream_poll(void)
         hw_cache_purge_range(sbuf + s_wr, s_n);
         s_wr += s_n;
         s_cpos += s_n;
+        s_fetched += s_n;
         if (s_cpos >= s_csize) {
             s_chunk++;
             s_csize = 0;

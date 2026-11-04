@@ -41,6 +41,7 @@ int      stream_eof(void);              /* everything fetched and consumed */
 int      stream_idle(void);             /* no transfer in flight */
 void     stream_stop(void);             /* finish what is in flight, fetch no more */
 int      stream_error(void);
+uint32_t stream_fetched(void);          /* bytes fetched so far (stats) */
 void    *stream_scratch(void);          /* the buffer, for other uses while not streaming */
 
 /* INFO.STI of a movie */

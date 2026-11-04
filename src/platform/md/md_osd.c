@@ -273,6 +273,59 @@ void osd_help(int show)
         osd_text(4, top + i, lines[i], is_heading(lines[i]));
 }
 
+static char *num(char *o, unsigned v)
+{
+    char t[6];
+    int n = 0;
+    do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v && n < 5);
+    while (n) *o++ = t[--n];
+    return o;
+}
+
+static char *str(char *o, const char *s)
+{
+    while (*s) *o++ = *s++;
+    return o;
+}
+
+static char *tenths(char *o, unsigned v)
+{
+    o = num(o, v / 10);
+    *o++ = '.';
+    return num(o, v % 10);
+}
+
+/* The stats (Y while watching), rows 2-3 on a panel.
+ * P1 bit 15: away. P1 bit 14 clear: line 1 - P1 decode ms x10 (average),
+ * P2 its maximum, P3 a frame's time; set: line 2 - P1 & 0x3FFF SD KB/s,
+ * P2 buffer KB | lowest sound queue (2 ms units) << 8, P3 sound gaps << 8 | skipped. */
+void osd_stats(uint16_t p1, uint16_t p2, uint16_t p3)
+{
+    if (p1 & 0x8000) {
+        clear_rows(2, 4);
+        return;
+    }
+    char t[48], *o = t;
+    int row;
+    if (!(p1 & 0x4000)) {
+        row = 2;
+        o = str(o, "DECODE "); o = tenths(o, p1);
+        o = str(o, " MAX "); o = tenths(o, p2);
+        o = str(o, " FRAME "); o = tenths(o, p3); o = str(o, " MS");
+    } else {
+        row = 3;
+        o = str(o, "SD "); o = num(o, p1 & 0x3FFF);
+        o = str(o, " BUF "); o = num(o, p2 & 0xFF);
+        o = str(o, "K SND "); o = num(o, (p2 >> 8) * 2);
+        o = str(o, " GAP "); o = num(o, p3 >> 8);
+        o = str(o, " SKP "); o = num(o, p3 & 0xFF);
+    }
+    *o = 0;
+    fill(PLANE_B, row, 0, COLS, 0x8000 | T_PANEL);
+    fill(PLANE_A, row, 0, COLS, 0);
+    osd_text(0, row, t, 0);
+}
+
 void osd_boot(const char *line1, const char *line2)
 {
     clear_rows(10, 16);

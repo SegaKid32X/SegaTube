@@ -55,6 +55,7 @@
 #define CMD_SD_INIT 1
 #define CMD_OPEN    2
 #define CMD_READ    3
+#define CMD_STATS   4
 #define CMD_OSD     5
 #define CMD_LIBRARY 6
 #define CMD_MESSAGE 7
