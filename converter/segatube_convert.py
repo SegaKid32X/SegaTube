@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """SegaTube Converter: turns ordinary video files into SegaTube movies.
 
-Drop MP4s (or anything ffmpeg reads) on it and point it at the EverDrive's SD
-card. Each movie becomes a folder in MOVIES/ holding INFO.STI (title, poster,
+Drop MP4s (or anything ffmpeg reads) on the app, or add them in its window,
+and point it at the EverDrive's SD card. Each movie becomes a folder in MOVIES/ holding INFO.STI (title, poster,
 scrub thumbnails) and one file per picture mode:
 
     FILM.STV  15-bit colour (32,768 colours on screen), up to 320x200
@@ -305,7 +305,7 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
 
 # ---------------------------------------------------------------- window
 
-def run_gui() -> None:
+def run_gui(prefill: list[Path] | None = None) -> None:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
 
@@ -332,6 +332,9 @@ def run_gui() -> None:
         if d:
             dest.set(d)
 
+    for f in prefill or []:
+        files.append(f)
+        lst.insert("end", str(f))
     ttk.Button(frm, text="Add videos...", command=add_files).grid(row=2, column=0, sticky="w", pady=4)
     ttk.Label(frm, text="SD card:").grid(row=3, column=0, sticky="w")
     ttk.Entry(frm, textvariable=dest, width=44).grid(row=3, column=1, sticky="we")
@@ -375,6 +378,10 @@ def run_gui() -> None:
 def main() -> int:
     if len(sys.argv) == 1:
         run_gui()
+        return 0
+    # videos dropped on the app (no options): the window, with them listed
+    if all(not a.startswith("-") and Path(a).is_file() for a in sys.argv[1:]):
+        run_gui([Path(a) for a in sys.argv[1:]])
         return 0
     ap = argparse.ArgumentParser(description="Convert videos into SegaTube movies.")
     ap.add_argument("inputs", nargs="+", type=Path)

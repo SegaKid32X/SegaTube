@@ -1,0 +1,70 @@
+# Builds SegaTube Converter for Windows and macOS (and Linux): the stvenc
+# encoder, ffmpeg (from imageio-ffmpeg) and the converter in one app.
+# Artifacts on every push; a release when a tag v* is pushed.
+name: converter
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe: .exe
+            name: SegaTubeConverter-windows
+          - os: macos-latest
+            exe: ""
+            name: SegaTubeConverter-macos
+          - os: ubuntu-latest
+            exe: ""
+            name: SegaTubeConverter-linux
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build stvenc
+        run: |
+          mkdir -p dist-bin
+          cc_cmd=cc
+          if [ "${{ runner.os }}" = "Windows" ]; then cc_cmd=gcc; fi
+          $cc_cmd -O2 -std=gnu11 -Isrc/codec -o dist-bin/stvenc${{ matrix.exe }} \
+            tools/stvenc/stvenc.c src/codec/stv_dec.c -lm
+      - name: Get ffmpeg
+        run: |
+          pip install imageio-ffmpeg pyinstaller
+          python -c "import imageio_ffmpeg, shutil; shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(), 'dist-bin/ffmpeg${{ matrix.exe }}')"
+          chmod +x dist-bin/* || true
+      - name: Smoke test
+        run: |
+          dist-bin/ffmpeg${{ matrix.exe }} -v error -y -f lavfi -i testsrc2=size=320x180:rate=24 \
+            -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac smoke.mp4
+          PATH="$PWD/dist-bin:$PATH" python converter/segatube_convert.py smoke.mp4 --out smoke-sd --modes full
+          ls -la smoke-sd/MOVIES/*
+      - name: Bundle
+        run: |
+          sep=":"
+          if [ "${{ runner.os }}" = "Windows" ]; then sep=";"; fi
+          pyinstaller --onefile --windowed --name SegaTubeConverter \
+            --add-binary "dist-bin/stvenc${{ matrix.exe }}${sep}." \
+            --add-binary "dist-bin/ffmpeg${{ matrix.exe }}${sep}." \
+            converter/segatube_convert.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
