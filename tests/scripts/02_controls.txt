@@ -1,4 +1,5 @@
 # Pause, fast forward, rewind, the scrubber, back to the library, the end.
+# rom: long
 run 150
 press a 6
 run 90

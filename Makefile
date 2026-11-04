@@ -119,13 +119,13 @@ test-rom-long: $(OBJ)/$(TARGET).raw $(LONGMOVIE)/INFO.STI | rom
 	python3 tests/verify_rom.py rom/$(TARGET)-long.32x $(OBJ)/$(TARGET).elf $(MARKERS) --min-text 2048
 
 # ---- tests ----
-host-test: tools $(TESTMOVIE)/INFO.STI
+host-test: tools $(TESTMOVIE)/INFO.STI $(LONGMOVIE)/INFO.STI
 	python3 tests/host/test_codec.py
 
 tests/harness: tests/harness.c
 	$(HOSTCC) -O2 -std=c11 -Wall -o $@ $< -ldl -lm
 
-check: $(ROM) test-rom host-test tests/harness
+check: $(ROM) test-rom test-rom-long host-test tests/harness
 	@if [ -f tests/emu/picodrive_libretro.so ]; then python3 tests/run_tests.py; \
 	else echo "SKIP emulator tests: put picodrive_libretro.so in tests/emu (see tests/emu/README.md)"; fi
 
