@@ -264,6 +264,7 @@ static int decode_errors;
 
 /* ---- stats (Y while watching): where the time goes ---- */
 #define FRT_TCR     (*(volatile uint8_t *)0xFFFFFE16)
+#define FRT_FTCSR   (*(volatile uint8_t *)0xFFFFFE11)
 #define FRT_FRCH    (*(volatile uint8_t *)0xFFFFFE12)
 #define FRT_FRCL    (*(volatile uint8_t *)0xFFFFFE13)
 static uint16_t frt(void)              /* 5.56 us ticks (clock / 128) */
@@ -735,7 +736,7 @@ static int play_from(int c)
                  * sound going and skip pictures up to the next chunk's
                  * intra pictures (the picture holds for a moment). */
                 if (chunk_first) skipping = 0;
-                else if (!first && !paused && mv.rate && audio_queued() < mv.rate / 8)
+                else if (!first && !paused && mv.rate && audio_queued() < mv.rate / 16)
                     skipping = 1;
                 record_audio(&r);
                 if (skipping) {
@@ -781,7 +782,10 @@ static int play_from(int c)
 int play_movie(int m, int kind)
 {
     cur_movie = m;
-    FRT_TCR = 0x02;                     /* the free-running timer: clock / 128 */
+    /* the free-running timer: clock / 128, counting freely (crt0 sets it
+     * to clear on compare match A at 2; the output level stays the same) */
+    FRT_TCR = 0x02;
+    FRT_FTCSR = 0x00;
     st_skipped = 0;
     have_info = info_read(m, &inf) == 0;
     if (kind != KIND_FILM && kind != KIND_FULL) kind = KIND_FILM;

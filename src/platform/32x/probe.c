@@ -234,6 +234,7 @@ static void sound_test(int *row)
  * The result: SH-2 cycles a block for each op, which the encoder's decode
  * cost model (tools/stvenc/stvenc.c cost_p8 / cost_dc) should match. ---- */
 #define FRT_TCR     (*(volatile uint8_t *)0xFFFFFE16)
+#define FRT_FTCSR   (*(volatile uint8_t *)0xFFFFFE11)
 #define FRT_FRCH    (*(volatile uint8_t *)0xFFFFFE12)
 #define FRT_FRCL    (*(volatile uint8_t *)0xFFFFFE13)
 static uint16_t frt(void)
@@ -317,6 +318,7 @@ static void bench_page(void)
 {
     static const char *const names[7] = { "SKIP", "FILL", "FILLRUN", "PAIR", "QUAD", "RAW", "MOVE" };
     FRT_TCR = 0x02;                         /* clock / 128 */
+    FRT_FTCSR = 0x00;                       /* count freely (crt0: clear at OCRA = 2) */
     md_cmd(CMD_CLEAR, 0, 0, 0);
     puts_at(1, 6, "DECODE SPEED (CYCLES A BLOCK)", 1);
     puts_at(4, 2, "BLOCK", 0);
