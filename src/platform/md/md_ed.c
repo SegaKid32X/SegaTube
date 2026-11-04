@@ -248,17 +248,28 @@ int ed_blind_test(int row)
     /* a different offset each run, so old data cannot pass */
     uint32_t off = 0x1000 + (uint32_t)(vblanks & 0x3F) * 0x1000;
     uint32_t len = 0x1000;
+    /* each step on screen first: if the console stops, the last one shown
+     * is where */
+    osd_text(1, row + 1, "BLIND READ:", 0);
+    osd_text(16, row + 1, "1 OPEN      ", 1);
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
     cmd_tx(CMD_F_FOPN);
     fifo_wr8(FA_READ);
     tx_string("/PROBE.BIN");
-    for (int i = 0; i < 10; i++) vdp_wait_vblank();
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
+    osd_text(16, row + 1, "2 SEEK      ", 1);
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
     cmd_tx(CMD_F_FPTR);
     fifo_wr32(off);
-    for (int i = 0; i < 3; i++) vdp_wait_vblank();
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
+    osd_text(16, row + 1, "3 READ      ", 1);
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
     cmd_tx(CMD_F_FRD_MEM);
     fifo_wr32(CART_SHARED);
     fifo_wr32(len);
     wait_run(30);                       /* half a second for 4 KiB */
+    osd_text(16, row + 1, "4 COMPARE   ", 1);
+    for (int i = 0; i < 20; i++) vdp_wait_vblank();
     int same = compare_blind(off, len);
     p = t;
     hex_string(p, (uint32_t)same, 4);
@@ -266,8 +277,8 @@ int ed_blind_test(int row)
     *p++ = '/';
     hex_string(p, len, 4);
     osd_text(1, row + 1, "BLIND READ:", 0);
-    osd_text(16, row + 1, same == (int)len ? "WORKS" : same > (int)len / 2 ? "PARTLY" : "NO DATA", same == (int)len);
-    osd_text(25, row + 1, t, 0);
+    osd_text(16, row + 1, same == (int)len ? "WORKS     " : same > (int)len / 2 ? "PARTLY    " : "NO DATA   ", same == (int)len);
+    osd_text(27, row + 1, t, 0);
     if (same != (int)len) return 0;
     /* how fast: 32 KiB with shorter and shorter waits */
     int best = 0;

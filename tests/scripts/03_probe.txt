@@ -1,5 +1,7 @@
 # rom: probe
-run 700
+run 400
+press a 6
+run 400
 shot allow_dark_p1
 press a 6
 run 60
