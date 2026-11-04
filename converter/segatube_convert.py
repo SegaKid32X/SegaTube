@@ -14,7 +14,7 @@ Usage:
     segatube_convert.py movie.mp4 ... --sd E:\\   convert onto an SD card
     segatube_convert.py movie.mp4 --out folder   convert into a folder
 
-Options: --modes film,full,i480   --quality 1-10   --rate-cap BYTES_PER_S
+Options: --modes film,full(,i480)   --quality 1-10   --rate-cap BYTES_PER_S
          --title TEXT (one input)  --start S --duration S (a part of the video)
 
 Needs ffmpeg (bundled in the release builds; otherwise on the PATH or from the
