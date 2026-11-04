@@ -166,6 +166,8 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
         return 0;
     case CMD_EDDIAG:
         return (unsigned)ed_diag(p1);
+    case CMD_EDRV:
+        return (unsigned)ed_rv_test(p1);
 #ifndef NO_BLIND
     case CMD_EDBLIND:
         return (unsigned)ed_blind_test(p1);

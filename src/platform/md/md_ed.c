@@ -326,6 +326,48 @@ int ed_blind_test(int row)
 
 #endif
 
+/* Hardware test: the I/O registers again, with RV = 1 (run from work RAM).
+ * Shows them on text rows row..row+2; returns 1 if the status command was
+ * answered with 0xA5. */
+extern const uint16_t ed_rv_code[], ed_rv_code_end[];
+static uint16_t rv_ram[96];
+static uint16_t rv_out[16];
+typedef void (*rv_fn)(uint16_t *out);
+
+int ed_rv_test(int row)
+{
+    int n = (int)(ed_rv_code_end - ed_rv_code);
+    for (int i = 0; i < n && i < 96; i++) rv_ram[i] = ed_rv_code[i];
+    for (int i = 0; i < 16; i++) rv_out[i] = 0xEEEE;
+    ((rv_fn)(void *)rv_ram)(rv_out);
+    char t[40], *p;
+    for (int half = 0; half < 2; half++) {
+        p = t;
+        for (int i = 0; i < 4; i++) {
+            hex_string(p, rv_out[half * 4 + i], 4);
+            p += 4;
+            *p++ = ' ';
+        }
+        *p = 0;
+        osd_text(1, row + half, half ? "RV=1 D8:" : "RV=1 D0:", 0);
+        osd_text(10, row + half, t, 0);
+    }
+    p = t;
+    hex_string(p, rv_out[8], 4); p += 4; *p++ = ' ';
+    hex_string(p, rv_out[9], 4); p += 4; *p++ = ' ';
+    p = (char *)t + 10;
+    *p++ = 'A'; *p++ = 'N'; *p++ = 'S'; *p++ = ' ';
+    hex_string(p, rv_out[10], 1); p += 1; *p++ = ':';
+    hex_string(p, rv_out[11] & 0xFF, 2); p += 2;
+    hex_string(p, rv_out[12] & 0xFF, 2); p += 2;
+    *p = 0;
+    int ok = rv_out[10] >= 1 && (rv_out[11] & 0xFF) == 0xA5;
+    uint16_t dt = (uint16_t)(rv_out[9] - rv_out[8]);
+    osd_text(1, row + 2, "RV=1 TIMER:", 0);
+    osd_text(13, row + 2, t, ok || (dt > 50 && dt < 200));
+    return ok;
+}
+
 /* The folders in /MOVIES, sorted. */
 int ed_list_movies(void)
 {
