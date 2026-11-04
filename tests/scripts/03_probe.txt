@@ -2,7 +2,8 @@
 run 400
 shot allow_dark_p1
 press a 6
+run 120
+shot allow_dark_p2_bench
+press a 6
 run 12
-shot allow_dark_p2_rerun
-run 400
-shot allow_dark_p3
+shot allow_dark_p3_rerun
