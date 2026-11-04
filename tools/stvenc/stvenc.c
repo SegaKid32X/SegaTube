@@ -167,11 +167,12 @@ static void build_lut(palette *p, int count)
 /* Median cut on BGR555 samples, then a few rounds of k-means. */
 static void make_palette(palette *p, uint16_t *px, int n)
 {
+    /* entry 0 is always black: the player's letterbox and border pixels */
     box boxes[256];
     int nb = 1;
     boxes[0].px = px;
     boxes[0].n = n;
-    while (nb < 256) {
+    while (nb < 255) {
         int bi = -1, best = 0, ax = 0;
         for (int i = 0; i < nb; i++) {
             if (boxes[i].n < 2) continue;
@@ -188,6 +189,8 @@ static void make_palette(palette *p, uint16_t *px, int n)
         boxes[bi].n = half;
         nb++;
     }
+    p->c555[0] = 0;
+    p->c[0] = from555(0);
     for (int i = 0; i < nb; i++) {
         long r = 0, g = 0, b = 0;
         for (int k = 0; k < boxes[i].n; k++) {
@@ -195,13 +198,14 @@ static void make_palette(palette *p, uint16_t *px, int n)
             r += q.r; g += q.g; b += q.b;
         }
         int m = boxes[i].n ? boxes[i].n : 1;
-        p->c555[i] = to555((int)(r / m), (int)(g / m), (int)(b / m));
-        p->c[i] = from555(p->c555[i]);
+        p->c555[i + 1] = to555((int)(r / m), (int)(g / m), (int)(b / m));
+        p->c[i + 1] = from555(p->c555[i + 1]);
     }
-    for (int i = nb; i < 256; i++) {
+    for (int i = nb + 1; i < 256; i++) {
         p->c555[i] = 0;
         p->c[i] = from555(0);
     }
+    nb++;                               /* black + the boxes */
     /* k-means refinement on the samples, via the LUT */
     static acc a[256];
     for (int it = 0; it < 3; it++) {
@@ -212,7 +216,7 @@ static void make_palette(palette *p, uint16_t *px, int n)
             acc *t = &a[p->lut[px[k]]];
             t->r += q.r; t->g += q.g; t->b += q.b; t->n++;
         }
-        for (int i = 0; i < nb; i++) {
+        for (int i = 1; i < nb; i++) {     /* (entry 0 stays black) */
             if (!a[i].n) continue;
             p->c555[i] = to555(a[i].r / a[i].n, a[i].g / a[i].n, a[i].b / a[i].n);
             p->c[i] = from555(p->c555[i]);
@@ -921,7 +925,7 @@ static void parse(int argc, char **argv)
     opt.audio_rate = 22050;
     opt.quality = 6;
     opt.rate_cap = 900000;
-    opt.max_record = 96 * 1024;
+    opt.max_record = 48 * 1024;
     opt.title = "";
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -1074,10 +1078,11 @@ int main(int argc, char **argv)
                 make_palette(&pal_new, samp, ns);
             }
             free(samp);
-            if (!reuse) {
+            if (!reuse)
                 pal_cur = pal_new;
-                chunk_pal = &pal_cur;
-            }
+            /* every chunk's first picture carries the palette, so a seek or a
+             * scan can start there; reuse only keeps colours steady */
+            chunk_pal = &pal_cur;
         }
 
         /* code the chunk; if it is over the rate cap, raise lambda and redo */

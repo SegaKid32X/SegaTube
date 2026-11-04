@@ -1,0 +1,231 @@
+/* md_ed.c - the Mega EverDrive PRO's SD card, from the 68000.
+ *
+ * The protocol is the EverDrive's documented I/O API (krikzz/mega-ed-pub,
+ * edio/everdrive.c, MIT licence): commands go byte by byte through a FIFO at
+ * 0xA130D1 as '+', ~'+', cmd, ~cmd and their arguments, most significant
+ * byte first; answers come back through the same FIFO. Every wait here has a
+ * time limit, so a console without an EverDrive (or an emulator) just gets
+ * "no EverDrive" instead of hanging.
+ *
+ * File data goes straight into cartridge memory (command 0xCB): the
+ * EverDrive's processor does the transfer while the 68000 waits in work RAM
+ * (md_halt.s). The SH-2s then read it from the cartridge.
+ */
+#include "md.h"
+
+#define ED_FIFO     (*(volatile uint8_t *)0xA130D1)
+#define ED_FSTAT    (*(volatile uint16_t *)0xA130D2)
+#define ED_TIMER    (*(volatile uint16_t *)0xA130D6)
+
+#define FIFO_CPU_RXF 0x8000     /* nothing for the CPU to read */
+#define FIFO_RXF_MSK 0x07FF
+
+#define CMD_STATUS   0x10
+#define CMD_DISK_INIT 0xC0
+#define CMD_F_DIR_LD 0xC5
+#define CMD_F_DIR_SIZE 0xC6
+#define CMD_F_DIR_GET 0xC8
+#define CMD_F_FOPN   0xC9
+#define CMD_F_FRD_MEM 0xCB
+#define CMD_F_FCLOSE 0xCE
+#define CMD_F_FPTR   0xCF
+
+#define STATUS_CMD_OK 0x02
+#define FA_READ      0x01
+#define DIR_OPT_SORTED 0x01
+#define AT_DIR       0x10
+
+#define ERR_TIMEOUT  0x50
+#define ERR_STATUS   0x40
+
+static int ed_ok;
+static long spin_limit = 600000;    /* FIFO waits (about 1.5 s) */
+
+/* ---- the FIFO ---- */
+
+static void fifo_wr(const void *data, int len)
+{
+    const uint8_t *p = data;
+    while (len--)
+        ED_FIFO = *p++;
+}
+
+static void fifo_wr8(unsigned v) { ED_FIFO = (uint8_t)v; }
+static void fifo_wr16(unsigned v) { fifo_wr8(v >> 8); fifo_wr8(v); }
+static void fifo_wr32(uint32_t v) { fifo_wr16(v >> 16); fifo_wr16(v & 0xFFFF); }
+
+/* Read len bytes; 0, or -1 if the EverDrive stopped answering. */
+static int fifo_rd(void *data, int len)
+{
+    uint8_t *p = data;
+    long spins = 0;
+    while (len) {
+        int n = ED_FSTAT & FIFO_RXF_MSK;
+        if (!n) {
+            if (++spins > spin_limit)
+                return -1;
+            continue;
+        }
+        spins = 0;
+        if (n > len) n = len;
+        len -= n;
+        while (n--)
+            *p++ = ED_FIFO;
+    }
+    return 0;
+}
+
+static void fifo_flush(void)
+{
+    ED_FIFO = 0;
+    ED_FIFO = 0;
+    for (int i = 0; i < 4096 && (ED_FSTAT & FIFO_RXF_MSK); i++)
+        (void)ED_FIFO;
+}
+
+static void cmd_tx(unsigned cmd)
+{
+    fifo_wr8('+');
+    fifo_wr8('+' ^ 0xFF);
+    fifo_wr8(cmd);
+    fifo_wr8(cmd ^ 0xFF);
+}
+
+static void tx_string(const char *s)
+{
+    int n = 0;
+    while (s[n]) n++;
+    fifo_wr16((unsigned)n);
+    fifo_wr(s, n);
+}
+
+static int check_status(void)
+{
+    uint8_t b[2];
+    cmd_tx(CMD_STATUS);
+    if (fifo_rd(b, 2))
+        return ERR_TIMEOUT;
+    if (b[0] != 0xA5)
+        return ERR_STATUS;
+    return b[1];
+}
+
+/* ---- the RAM-resident wait ---- */
+
+extern const uint16_t ed_halt_code[], ed_halt_code_end[];
+static uint16_t halt_ram[48];
+typedef int (*halt_fn)(int stat_req);
+
+void ed_init_halt(void)
+{
+    int n = (int)(ed_halt_code_end - ed_halt_code);
+    for (int i = 0; i < n && i < (int)(sizeof halt_ram / 2); i++)
+        halt_ram[i] = ed_halt_code[i];
+}
+
+/* ---- commands ---- */
+
+int ed_detect(void)
+{
+    ed_init_halt();
+    /* an EverDrive answers the status command with 0xA5, 0x00 */
+    fifo_flush();
+    spin_limit = 100000;            /* no EverDrive: give up quickly */
+    ed_ok = check_status() == 0;
+    spin_limit = 600000;
+    if (!ed_ok)
+        return 0;
+    /* the SD card: initialise it if the root does not list */
+    cmd_tx(CMD_F_DIR_LD);
+    fifo_wr8(0);
+    tx_string("/");
+    if (check_status()) {
+        cmd_tx(CMD_DISK_INIT);
+        if (check_status())
+            return ed_ok = 0, 0;
+    }
+    return 1;
+}
+
+static int rx_name(char *out, int max)
+{
+    uint8_t b[2];
+    if (fifo_rd(b, 2)) return -1;
+    int n = b[0] << 8 | b[1];
+    for (int i = 0; i < n; i++) {
+        uint8_t c;
+        if (fifo_rd(&c, 1)) return -1;
+        if (i < max - 1) out[i] = (char)c;
+    }
+    out[n < max - 1 ? n : max - 1] = 0;
+    return 0;
+}
+
+/* The folders in /MOVIES, sorted. */
+int ed_list_movies(void)
+{
+    if (!ed_ok) return -1;
+    cmd_tx(CMD_F_DIR_LD);
+    fifo_wr8(DIR_OPT_SORTED);
+    tx_string("/MOVIES");
+    if (check_status())
+        return 0;                       /* no MOVIES folder: no movies */
+    uint8_t b[2];
+    cmd_tx(CMD_F_DIR_SIZE);
+    if (fifo_rd(b, 2)) return -1;
+    int total = b[0] << 8 | b[1];
+    if (total > 1000) total = 1000;
+    cmd_tx(CMD_F_DIR_GET);
+    fifo_wr16(0);
+    fifo_wr16((unsigned)total);
+    fifo_wr16(NAME_LEN - 1);
+    movie_count = 0;
+    for (int i = 0; i < total; i++) {
+        uint8_t resp, info[9];
+        char name[NAME_LEN];
+        if (fifo_rd(&resp, 1) || resp) return movie_count;
+        if (fifo_rd(info, 9) || rx_name(name, NAME_LEN)) return -1;
+        if (!(info[8] & AT_DIR) || name[0] == '.' || movie_count >= MAX_MOVIES)
+            continue;
+        for (int k = 0; k < NAME_LEN; k++) movie_name[movie_count][k] = name[k];
+        movie_count++;
+    }
+    return movie_count;
+}
+
+int ed_open(const char *path)
+{
+    if (!ed_ok) return ERR_STATUS;
+    cmd_tx(CMD_F_FCLOSE);
+    (void)check_status();
+    cmd_tx(CMD_F_FOPN);
+    fifo_wr8(FA_READ);
+    tx_string(path);
+    return check_status();
+}
+
+int ed_close(void)
+{
+    if (!ed_ok) return ERR_STATUS;
+    cmd_tx(CMD_F_FCLOSE);
+    return check_status();
+}
+
+/* Read len bytes at offset of the open file into cartridge memory. */
+int ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len)
+{
+    if (!ed_ok) return ERR_STATUS;
+    cmd_tx(CMD_F_FPTR);
+    fifo_wr32(offset);
+    int e = check_status();
+    if (e) return e;
+    COMM16(C_FLAGS) |= FL_BUSY;
+    cmd_tx(CMD_F_FRD_MEM);
+    fifo_wr32(cart_addr);
+    fifo_wr32(len);
+    int t = ((halt_fn)(void *)halt_ram)(STATUS_CMD_OK);
+    COMM16(C_FLAGS) &= (uint16_t)~FL_BUSY;
+    if (t)
+        return ERR_TIMEOUT;
+    return check_status();
+}
