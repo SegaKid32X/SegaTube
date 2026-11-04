@@ -235,7 +235,17 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
                         "-i", str(src.path), "-vn", "-ac", "2", "-ar", str(AUDIO_RATE),
                         "-f", "s16le", str(audio)], check=True)
 
-    for k, mode in enumerate(modes):
+    # the modes encode at the same time (one encoder each, a core each)
+    done = {m: 0.0 for m in modes}
+    errors = []
+    lock = threading.Lock()
+    plain_log = log
+
+    def log(msg):
+        with lock:
+            plain_log(msg)
+
+    def encode(mode):
         g = geometry(mode, src)
         lines = g.h
         out_fps = g.fps * (2 if g.temporal else 1)
@@ -260,13 +270,23 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
         dec.stdout.close()
         for line in enc.stderr:
             m = re.match(r"chunk \d+: frames \d+-(\d+)", line)
-            if m and progress:
-                progress((k + int(m[1]) / max(1, frames)) / (len(modes) + 0.2))
-            elif not m:
-                log("  " + line.rstrip())
+            if m:
+                done[mode] = int(m[1]) / max(1, frames)
+                if progress:
+                    progress(sum(done.values()) / (len(modes) + 0.2))
+            elif not line.startswith("palette:"):
+                log(f"  {FILE_NAMES[mode]}: " + line.rstrip())
         if enc.wait() != 0:
-            raise SystemExit(f"stvenc failed on {src_path.name} ({mode})")
+            errors.append(f"stvenc failed on {src_path.name} ({mode})")
         dec.wait()
+
+    threads = [threading.Thread(target=encode, args=(m,)) for m in modes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise SystemExit("; ".join(errors))
 
     log("  thumbnails")
     every = max(1, min(THUMB_EVERY_S, round(length / 200)))

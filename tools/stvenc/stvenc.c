@@ -121,36 +121,8 @@ typedef struct {
     int      valid;
 } palette;
 
-typedef struct { int r, g, b, n; } acc;
-
-typedef struct { uint16_t *px; int n; } box;
-
-static int axis_range(const uint16_t *px, int n, int *axis)
-{
-    int lo[3] = { 31, 31, 31 }, hi[3] = { 0, 0, 0 };
-    for (int i = 0; i < n; i++) {
-        int v[3] = { px[i] & 31, (px[i] >> 5) & 31, (px[i] >> 10) & 31 };
-        for (int k = 0; k < 3; k++) {
-            if (v[k] < lo[k]) lo[k] = v[k];
-            if (v[k] > hi[k]) hi[k] = v[k];
-        }
-    }
-    int wgt[3] = { WR, WG, WB }, best = -1, ba = 0;
-    for (int k = 0; k < 3; k++) {
-        int s = (hi[k] - lo[k]) * (hi[k] - lo[k]) * wgt[k];
-        if (s > best) { best = s; ba = k; }
-    }
-    *axis = ba;
-    return best;
-}
-
-static int cmp_axis;
-static int cmp_px(const void *a, const void *b)
-{
-    int sa = cmp_axis * 5, va = (*(const uint16_t *)a >> sa) & 31, vb = (*(const uint16_t *)b >> sa) & 31;
-    return va - vb;
-}
-
+struct histogram_s;
+static double palette_error(const palette *p, const struct histogram_s *h);
 static void build_lut(palette *p, int count)
 {
     for (int c = 0; c < 32768; c++) {
@@ -164,41 +136,111 @@ static void build_lut(palette *p, int count)
     }
 }
 
-/* Median cut on BGR555 samples, then a few rounds of k-means. */
-static void make_palette(palette *p, uint16_t *px, int n)
+/* A histogram of BGR555 colours: what the palette is made from. */
+typedef struct histogram_s {
+    uint32_t count[32768];
+    uint16_t uniq[32768];       /* the colours present */
+    uint32_t n;
+    double total;
+} histogram;
+
+static void hist_finish(histogram *h)
 {
-    /* entry 0 is always black: the player's letterbox and border pixels */
+    h->n = 0;
+    h->total = 0;
+    for (int c = 0; c < 32768; c++)
+        if (h->count[c]) {
+            h->uniq[h->n++] = (uint16_t)c;
+            h->total += h->count[c];
+        }
+}
+
+typedef struct {
+    int lo, hi;                 /* range of h->uniq */
+    double score;               /* how much splitting it helps */
+    int axis;
+} box;
+
+static const histogram *sort_hist;
+static int sort_shift;
+static int cmp_axis_c(const void *a, const void *b)
+{
+    int va = (*(const uint16_t *)a >> sort_shift) & 31, vb = (*(const uint16_t *)b >> sort_shift) & 31;
+    return va - vb;
+}
+
+static void box_measure(const histogram *h, box *bx)
+{
+    int lo[3] = { 31, 31, 31 }, hi[3] = { 0, 0, 0 };
+    double w = 0;
+    for (int i = bx->lo; i < bx->hi; i++) {
+        unsigned c = h->uniq[i];
+        int v[3] = { (int)(c & 31), (int)(c >> 5 & 31), (int)(c >> 10 & 31) };
+        for (int k = 0; k < 3; k++) {
+            if (v[k] < lo[k]) lo[k] = v[k];
+            if (v[k] > hi[k]) hi[k] = v[k];
+        }
+        w += h->count[c];
+    }
+    static const int wgt[3] = { WR, WG, WB };
+    double best = -1;
+    for (int k = 0; k < 3; k++) {
+        double s2 = (double)(hi[k] - lo[k]) * (hi[k] - lo[k]) * wgt[k];
+        if (s2 > best) { best = s2; bx->axis = k; }
+    }
+    bx->score = bx->hi - bx->lo < 2 ? -1 : best * sqrt(w);
+}
+
+/* Median cut over the histogram (entry 0 stays black), then k-means. */
+static void make_palette(palette *p, const histogram *h)
+{
     box boxes[256];
     int nb = 1;
-    boxes[0].px = px;
-    boxes[0].n = n;
+    boxes[0].lo = 0;
+    boxes[0].hi = (int)h->n;
+    box_measure(h, &boxes[0]);
+    uint16_t *u = (uint16_t *)h->uniq;
     while (nb < 255) {
-        int bi = -1, best = 0, ax = 0;
-        for (int i = 0; i < nb; i++) {
-            if (boxes[i].n < 2) continue;
-            int a, r = axis_range(boxes[i].px, boxes[i].n, &a);
-            r = r * (int)(sqrt((double)boxes[i].n) + 1);
-            if (r > best) { best = r; bi = i; ax = a; }
-        }
+        int bi = -1;
+        double best = 0;
+        for (int i = 0; i < nb; i++)
+            if (boxes[i].score > best) { best = boxes[i].score; bi = i; }
         if (bi < 0) break;
-        cmp_axis = ax;
-        qsort(boxes[bi].px, (size_t)boxes[bi].n, 2, cmp_px);
-        int half = boxes[bi].n / 2;
-        boxes[nb].px = boxes[bi].px + half;
-        boxes[nb].n = boxes[bi].n - half;
-        boxes[bi].n = half;
+        box *bx = &boxes[bi];
+        sort_hist = h;
+        sort_shift = bx->axis * 5;
+        qsort(u + bx->lo, (size_t)(bx->hi - bx->lo), 2, cmp_axis_c);
+        /* split at the weighted mean along the axis (a weighted median
+         * would peel off one dominant colour at a time and leave the
+         * wide rest unsplit) */
+        double tot = 0, sum = 0;
+        for (int i = bx->lo; i < bx->hi; i++) {
+            double c = h->count[u[i]];
+            tot += c;
+            sum += c * ((u[i] >> sort_shift) & 31);
+        }
+        double mean = tot > 0 ? sum / tot : 0;
+        int cut = bx->lo;
+        while (cut < bx->hi && ((u[cut] >> sort_shift) & 31) <= mean) cut++;
+        if (cut <= bx->lo || cut >= bx->hi) cut = (bx->lo + bx->hi) / 2;
+        boxes[nb].lo = cut;
+        boxes[nb].hi = bx->hi;
+        bx->hi = cut;
+        box_measure(h, bx);
+        box_measure(h, &boxes[nb]);
         nb++;
     }
     p->c555[0] = 0;
     p->c[0] = from555(0);
     for (int i = 0; i < nb; i++) {
-        long r = 0, g = 0, b = 0;
-        for (int k = 0; k < boxes[i].n; k++) {
-            rgb q = from555(boxes[i].px[k]);
-            r += q.r; g += q.g; b += q.b;
+        double r = 0, g = 0, b = 0, w = 0;
+        for (int k = boxes[i].lo; k < boxes[i].hi; k++) {
+            rgb q = from555(u[k]);
+            double c = h->count[u[k]];
+            r += q.r * c; g += q.g * c; b += q.b * c; w += c;
         }
-        int m = boxes[i].n ? boxes[i].n : 1;
-        p->c555[i + 1] = to555((int)(r / m), (int)(g / m), (int)(b / m));
+        if (w <= 0) w = 1;
+        p->c555[i + 1] = to555((int)(r / w + 0.5), (int)(g / w + 0.5), (int)(b / w + 0.5));
         p->c[i + 1] = from555(p->c555[i + 1]);
     }
     for (int i = nb + 1; i < 256; i++) {
@@ -206,37 +248,44 @@ static void make_palette(palette *p, uint16_t *px, int n)
         p->c[i] = from555(0);
     }
     nb++;                               /* black + the boxes */
-    /* k-means refinement on the samples, via the LUT */
-    static acc a[256];
+#ifdef PALDEBUG
+    build_lut(p, nb);
+    p->valid = 1;
+    fprintf(stderr, "median cut: %d entries, error %.1f\n", nb, palette_error(p, h));
+#endif
+    /* k-means refinement over the histogram, via the LUT */
+    static double acc[256][4];
     for (int it = 0; it < 3; it++) {
         build_lut(p, nb);
-        memset(a, 0, sizeof a);
-        for (int k = 0; k < n; k++) {
-            rgb q = from555(px[k]);
-            acc *t = &a[p->lut[px[k]]];
-            t->r += q.r; t->g += q.g; t->b += q.b; t->n++;
+        memset(acc, 0, sizeof acc);
+        for (uint32_t k = 0; k < h->n; k++) {
+            unsigned c = u[k];
+            rgb q = from555(c);
+            double wgt = h->count[c];
+            double *t = acc[p->lut[c]];
+            t[0] += q.r * wgt; t[1] += q.g * wgt; t[2] += q.b * wgt; t[3] += wgt;
         }
         for (int i = 1; i < nb; i++) {     /* (entry 0 stays black) */
-            if (!a[i].n) continue;
-            p->c555[i] = to555(a[i].r / a[i].n, a[i].g / a[i].n, a[i].b / a[i].n);
+            if (acc[i][3] <= 0) continue;
+            p->c555[i] = to555((int)(acc[i][0] / acc[i][3] + 0.5), (int)(acc[i][1] / acc[i][3] + 0.5),
+                               (int)(acc[i][2] / acc[i][3] + 0.5));
             p->c[i] = from555(p->c555[i]);
         }
     }
-    /* entries the samples never used stay black; the LUT covers only real ones */
     build_lut(p, nb);
     p->valid = 1;
 }
 
-/* Mean error of the samples against a palette */
-static double palette_error(const palette *p, const uint16_t *px, int n)
+/* Mean error of the histogram's pixels against a palette */
+static double palette_error(const palette *p, const struct histogram_s *h)
 {
     double e = 0;
-    for (int k = 0; k < n; k++) {
-        rgb q = from555(px[k]);
-        rgb c = p->c[p->lut[px[k]]];
-        e += cerr(q.r, q.g, q.b, c.r, c.g, c.b);
+    for (uint32_t k = 0; k < h->n; k++) {
+        unsigned c = h->uniq[k];
+        rgb q = from555(c), d = p->c[p->lut[c]];
+        e += (double)cerr(q.r, q.g, q.b, d.r, d.g, d.b) * h->count[c];
     }
-    return n ? e / n : 0;
+    return h->total > 0 ? e / h->total : 0;
 }
 
 /* ------------------------------------------------------------ frame buffer model */
@@ -343,28 +392,28 @@ static long kmeans(const coder *c, const rgb *src, int k, uint16_t *cols, uint8_
         if (l < ll) { ll = l; lo = i; }
         if (l > lh) { lh = l; hi = i; }
     }
-    double cen[4][3];
+    float cen[4][3];
     cen[0][0] = src[lo].r; cen[0][1] = src[lo].g; cen[0][2] = src[lo].b;
     cen[1][0] = src[hi].r; cen[1][1] = src[hi].g; cen[1][2] = src[hi].b;
     if (k == 4) {
         for (int a = 0; a < 3; a++) {
-            cen[2][a] = cen[0][a] * 2 / 3 + cen[1][a] / 3;
-            cen[3][a] = cen[0][a] / 3 + cen[1][a] * 2 / 3;
+            cen[2][a] = cen[0][a] * 2.0f / 3 + cen[1][a] / 3;
+            cen[3][a] = cen[0][a] / 3 + cen[1][a] * 2.0f / 3;
         }
     }
     uint8_t lab[16];
-    for (int it = 0; it < 4; it++) {
+    for (int it = 0; it < 3; it++) {
         for (int i = 0; i < 16; i++) {
-            double best = 1e30;
+            float best = 1e30f;
             int bj = 0;
             for (int j = 0; j < k; j++) {
-                double dr = src[i].r - cen[j][0], dg = src[i].g - cen[j][1], db = src[i].b - cen[j][2];
-                double d = WR * dr * dr + WG * dg * dg + WB * db * db;
+                float dr = src[i].r - cen[j][0], dg = src[i].g - cen[j][1], db = src[i].b - cen[j][2];
+                float d = WR * dr * dr + WG * dg * dg + WB * db * db;
                 if (d < best) { best = d; bj = j; }
             }
             lab[i] = (uint8_t)bj;
         }
-        double s[4][4] = { { 0 } };
+        float s[4][4] = { { 0 } };
         for (int i = 0; i < 16; i++) {
             s[lab[i]][0] += src[i].r; s[lab[i]][1] += src[i].g; s[lab[i]][2] += src[i].b; s[lab[i]][3]++;
         }
@@ -434,7 +483,9 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
         t.err = block_err(c, src, t.px);
         t.bytes = dc ? 2 : 1;
         CONSIDER();
-        if (t.err == 0) return;
+        /* the bigger modes cost at least (PAIR - FILL) more bytes: if that
+         * much lambda is more than all the error left, none can win */
+        if (bestj <= lam * (dc ? 4 : 3)) return;
     }
     /* PAIR */
     {
@@ -455,6 +506,7 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
             CONSIDER();
         }
     }
+    if (bestj <= lam * (dc ? 6 : 4)) return;   /* (QUAD costs that much more again) */
     /* QUAD */
     {
         uint8_t idx[16];
@@ -1055,29 +1107,24 @@ int main(int argc, char **argv)
         /* palette for the chunk (P8) */
         const palette *chunk_pal = NULL;
         if (depth == STV_DEPTH_P8) {
-            int per = (int)(pic_px / 4 / 1);
-            int ns = 0;
-            uint16_t *samp = malloc(sizeof(uint16_t) * (size_t)(per * n * fields + 1));
+            static histogram hist;
+            memset(hist.count, 0, sizeof hist.count);
             for (int i = 0; i < n; i++)
                 for (int k = 0; k < fields; k++)
                     for (int y = (i & 1); y < h; y += 2)
                         for (int x = (i >> 1 & 1); x < w; x += 2) {
                             const rgb *p = &gop[i].pic[k][y * w + x];
-                            if (ns < per * n * fields) samp[ns++] = to555(p->r, p->g, p->b);
+                            hist.count[to555(p->r, p->g, p->b)]++;
                         }
+            hist_finish(&hist);
             int reuse = 0;
+            make_palette(&pal_new, &hist);
             if (pal_cur.valid) {
-                double e_old = palette_error(&pal_cur, samp, ns);
-                uint16_t *copy = malloc(sizeof(uint16_t) * (size_t)ns);
-                memcpy(copy, samp, sizeof(uint16_t) * (size_t)ns);
-                make_palette(&pal_new, copy, ns);
-                free(copy);
-                double e_new = palette_error(&pal_new, samp, ns);
+                double e_old = palette_error(&pal_cur, &hist);
+                double e_new = palette_error(&pal_new, &hist);
                 reuse = e_old <= e_new * 1.08 + 2.0;
-            } else {
-                make_palette(&pal_new, samp, ns);
             }
-            free(samp);
+            if (opt.verbose) fprintf(stderr, "palette: %u colours, error %.1f\n", hist.n, palette_error(&pal_new, &hist));
             if (!reuse)
                 pal_cur = pal_new;
             /* every chunk's first picture carries the palette, so a seek or a
