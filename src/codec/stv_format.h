@@ -53,7 +53,7 @@
 #define STV_MAGIC           0x53545631u     /* "STV1" */
 #define STV_INFO_MAGIC      0x53544931u     /* "STI1" */
 #define STV_CHUNK_MAGIC     0x43484E4Bu     /* "CHNK" */
-#define STV_VERSION         2   /* 2: op 7 is GRAD (1: SKIPLONG) */
+#define STV_VERSION         2   /* newest the player reads; 2: op 7 is GRAD (1: SKIPLONG) */
 
 #define STV_FILE_HEADER     4096
 #define STV_INFO_HEADER     4096

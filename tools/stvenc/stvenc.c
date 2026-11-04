@@ -22,6 +22,10 @@
 #include <math.h>
 #include <errno.h>
 #include "stv_dec.h"
+/* The first encoder: version 1 files (op 7 = SKIPLONG). The player also
+ * plays version 2 (gradient blocks, an experiment that was dropped). */
+#define ENC_VERSION 1
+
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -335,8 +339,8 @@ typedef struct {
 
 /* Per-mode decode cost estimates in SH-2 cycles, P8 and DC (tuned by
  * the benchmark build; see docs/DESIGN.md). */
-static const int cost_p8[8] = { 6, 40, 30, 70, 110, 50, 140, 60 };   /* [7]: GRAD */
-static const int cost_dc[8] = { 6, 60, 50, 110, 160, 90, 220, 260 };
+static const int cost_p8[8] = { 6, 40, 30, 70, 110, 50, 140, 6 };
+static const int cost_dc[8] = { 6, 60, 50, 110, 160, 90, 220, 6 };
 
 typedef struct {
     const palette *pal;             /* P8 */
@@ -356,8 +360,7 @@ static inline unsigned nearest(const coder *c, int r, int g, int b)
     return c->depth == STV_DEPTH_P8 ? c->pal->lut[k] : k;
 }
 
-/* Plain squared error (the PSNR figures) */
-static long block_mse(const coder *c, const rgb *src, const uint16_t *px)
+static long block_err(const coder *c, const rgb *src, const uint16_t *px)
 {
     long e = 0;
     for (int i = 0; i < 16; i++) {
@@ -366,67 +369,6 @@ static long block_mse(const coder *c, const rgb *src, const uint16_t *px)
     }
     return e;
 }
-
-/* What the encoder minimises: the squared error, plus the error of the four
- * 2x2 averages (what the eye, and a CRT, see of fine dither): a dithered ramp
- * is then as good as it looks, and a flat block on a gradient as bad. */
-static long block_err(const coder *c, const rgb *src, const uint16_t *px)
-{
-    long e = 0;
-    int ar[4] = { 0 }, ag[4] = { 0 }, ab[4] = { 0 }, sr[4] = { 0 }, sg[4] = { 0 }, sb[4] = { 0 };
-    for (int i = 0; i < 16; i++) {
-        rgb q = px_rgb(c, px[i]);
-        e += cerr(src[i].r, src[i].g, src[i].b, q.r, q.g, q.b);
-        int k = ((i >> 3) & 1) * 2 + ((i >> 1) & 1);
-        ar[k] += q.r; ag[k] += q.g; ab[k] += q.b;
-        sr[k] += src[i].r; sg[k] += src[i].g; sb[k] += src[i].b;
-    }
-    long lp = 0;
-    for (int k = 0; k < 4; k++)
-        lp += cerr(sr[k], sg[k], sb[k], ar[k], ag[k], ab[k]);  /* sums of 4: x16 */
-    return e + lp / 4;                  /* (same scale as 4 pixels' error x 4) */
-}
-
-/* GRAD (direct colour): corners from a least-squares fit of the bilinear
- * blend; pinv is the pseudo-inverse of the 16 x 4 blend weights. */
-static double grad_pinv[4][16];
-
-static void grad_init(void)
-{
-    double a[16][4], ata[4][8];
-    for (int i = 0; i < 16; i++) {
-        double wx = (2 * (i & 3) + 1) / 8.0, wy = (2 * (i >> 2) + 1) / 8.0;
-        a[i][0] = (1 - wx) * (1 - wy); a[i][1] = wx * (1 - wy);
-        a[i][2] = (1 - wx) * wy;       a[i][3] = wx * wy;
-    }
-    for (int r = 0; r < 4; r++)
-        for (int k = 0; k < 4; k++) {
-            double v = 0;
-            for (int i = 0; i < 16; i++) v += a[i][r] * a[i][k];
-            ata[r][k] = v;
-            ata[r][k + 4] = r == k;
-        }
-    for (int col = 0; col < 4; col++) {         /* Gauss-Jordan */
-        int piv = col;
-        for (int r = col + 1; r < 4; r++) if (fabs(ata[r][col]) > fabs(ata[piv][col])) piv = r;
-        for (int k = 0; k < 8; k++) { double t = ata[col][k]; ata[col][k] = ata[piv][k]; ata[piv][k] = t; }
-        double d = ata[col][col];
-        for (int k = 0; k < 8; k++) ata[col][k] /= d;
-        for (int r = 0; r < 4; r++) {
-            if (r == col) continue;
-            double f = ata[r][col];
-            for (int k = 0; k < 8; k++) ata[r][k] -= f * ata[col][k];
-        }
-    }
-    for (int r = 0; r < 4; r++)
-        for (int i = 0; i < 16; i++) {
-            double v = 0;
-            for (int k = 0; k < 4; k++) v += ata[r][k + 4] * a[i][k];
-            grad_pinv[r][i] = v;
-        }
-}
-
-static int clamp8(double v) { return v < 0 ? 0 : v > 255 ? 255 : (int)(v + 0.5); }
 
 /* Assign each pixel the nearest of k colours; returns the error. */
 static long assign(const coder *c, const rgb *src, const uint16_t *cols, int k, uint8_t *idx)
@@ -504,17 +446,7 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
                    int intra, int prow0, int prow1, const int8_t (*mvc)[2], int nmvc, choice *out)
 {
     const int dc = c->depth == STV_DEPTH_DC;
-    /* smooth blocks show blocking most: spend more there (lower lambda),
-     * less in busy texture, which hides it */
-    double act = 0;
-    {
-        int l[16], mean = 0;
-        for (int i = 0; i < 16; i++) { l[i] = 3 * src[i].r + 6 * src[i].g + src[i].b; mean += l[i]; }
-        mean /= 16;
-        for (int i = 0; i < 16; i++) act += abs(l[i] - mean);
-        act /= 160.0;                   /* mean deviation, 0..255 luma */
-    }
-    const double lam = c->lambda * (0.3 + 1.0 * (act > 16 ? 1.0 : act / 16.0));
+    const double lam = c->lambda;
     double bestj = 1e300;
     choice t;
 
@@ -562,40 +494,12 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
          * much lambda is more than all the error left, none can win */
         if (bestj <= lam * (dc ? 4 : 3)) return;
     }
-    /* GRAD: four corner colours, blended (direct colour) or dithered (256) */
-    {
-        memset(&t, 0, sizeof t);
-        t.mode = STV_OP_GRAD;
-        t.ncol = 4;
-        if (dc) {
-            for (int k = 0; k < 4; k++) {
-                double r = 0, g = 0, b = 0;
-                for (int i = 0; i < 16; i++) {
-                    r += grad_pinv[k][i] * src[i].r; g += grad_pinv[k][i] * src[i].g; b += grad_pinv[k][i] * src[i].b;
-                }
-                t.col[k] = to555(clamp8(r), clamp8(g), clamp8(b));
-            }
-            stv_grad_dc(t.col, t.px);
-            t.bytes = 8;
-        } else {
-            for (int k = 0; k < 4; k++) {
-                int r = 0, g = 0, b = 0;
-                for (int i = 0; i < 16; i++)
-                    if (stv_grad_pattern[i] == k) { r += src[i].r; g += src[i].g; b += src[i].b; }
-                t.col[k] = (uint16_t)nearest(c, (r + 2) / 4, (g + 2) / 4, (b + 2) / 4);
-            }
-            for (int i = 0; i < 16; i++) t.px[i] = t.col[stv_grad_pattern[i]];
-            t.bytes = 4;
-        }
-        t.err = block_err(c, src, t.px);
-        CONSIDER();
-    }
     /* PAIR */
     {
         uint8_t idx[16];
         memset(&t, 0, sizeof t);
         t.mode = STV_OP_PAIR;
-        (void)kmeans(c, src, 2, t.col, idx);
+        t.err = kmeans(c, src, 2, t.col, idx);
         if (t.col[0] != t.col[1]) {
             t.ncol = 2;
             unsigned mk = 0;
@@ -603,7 +507,6 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
                 mk = mk << 1 | idx[i];
                 t.px[i] = t.col[idx[i]];
             }
-            t.err = block_err(c, src, t.px);
             t.msk[0] = (uint16_t)mk;
             t.nmsk = 1;
             t.bytes = dc ? 6 : 4;
@@ -616,14 +519,13 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
         uint8_t idx[16];
         memset(&t, 0, sizeof t);
         t.mode = STV_OP_QUAD;
-        (void)kmeans(c, src, 4, t.col, idx);
+        t.err = kmeans(c, src, 4, t.col, idx);
         t.ncol = 4;
         uint32_t ix = 0;
         for (int i = 0; i < 16; i++) {
             ix = ix << 2 | idx[i];
             t.px[i] = t.col[idx[i]];
         }
-        t.err = block_err(c, src, t.px);
         t.msk[0] = (uint16_t)(ix >> 16);
         t.msk[1] = (uint16_t)(ix & 0xFFFF);
         t.nmsk = 2;
@@ -658,6 +560,13 @@ typedef struct {
 static void emit_run(part_out *p, int mode, int n)
 {
     while (n > 0) {
+        if (mode == STV_OP_SKIP && n >= 64) {
+            int k = n / 32;
+            if (k > 32) k = 32;
+            put8(&p->ops, STV_OP(STV_OP_SKIPLONG, k));
+            n -= k * 32;
+            continue;
+        }
         int k = n > 32 ? 32 : n;
         put8(&p->ops, STV_OP(mode, k));
         n -= k;
@@ -717,7 +626,7 @@ static void code_part(const coder *c, const rgb *src, int w, fbuf *f, int intra,
             for (int y = 0; y < 4; y++)
                 for (int x = 0; x < 4; x++)
                     fb_set(f, bx * 4 + x, by * 4 + y, ch[i].px[y * 4 + x]);
-            d += block_mse(c, blk, ch[i].px);
+            d += ch[i].err;
             p->cost += cost[ch[i].mode];
         }
     }
@@ -880,7 +789,7 @@ static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int int
     set32(out->p + start + 4, (uint32_t)(out->n - start));
 
     /* the real decoder, on what we wrote, must give the same buffer */
-    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, STV_VERSION };
+    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION };
     for (int k = 0; k < nparts; k++) {
         int e = stv_decode_part(out->p + part_at[k], (uint32_t)(out->n - part_at[k]), &t);
         if (e != STV_OK) {
@@ -1104,7 +1013,6 @@ int main(int argc, char **argv)
     _setmode(_fileno(stdin), _O_BINARY);    /* raw frames, not text */
 #endif
     parse(argc, argv);
-    grad_init();
     const int depth = opt.profile == STV_PROF_FILM ? STV_DEPTH_DC : STV_DEPTH_P8;
     const int fields = 1;           /* (the format allows two field pictures a record) */
     const int w = opt.w, h = opt.h, bw = w / 4, bh = h / 4;
@@ -1383,7 +1291,7 @@ int main(int argc, char **argv)
     bytes hdr;
     memset(&hdr, 0, sizeof hdr);
     put32(&hdr, STV_MAGIC);
-    put16(&hdr, STV_VERSION);
+    put16(&hdr, ENC_VERSION);
     put16(&hdr, (unsigned)opt.profile);
     put16(&hdr, (unsigned)depth);
     put16(&hdr, fields == 2);
