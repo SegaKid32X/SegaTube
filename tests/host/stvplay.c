@@ -166,7 +166,7 @@ int main(int argc, char **argv)
                     q += 512;
                 }
                 int buf = H.interlaced ? k : (int)(frame & 1);
-                stv_target t = { fb[buf], pitch, H.w / 4, H.h / 4, H.depth, H.version };
+                stv_target t = { fb[buf], pitch, H.w / 4, H.h / 4, H.depth, H.version, 0 };
                 for (int j = 0; j < parts; j++) {
                     uint32_t po = stv_rd32(q + 4 * j);
                     int e = stv_decode_part(p + po, (uint32_t)psize - po, &t);

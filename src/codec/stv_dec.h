@@ -15,6 +15,8 @@ typedef struct {
     int      bh;        /* picture height in blocks */
     int      depth;     /* STV_DEPTH_P8 or STV_DEPTH_DC */
     int      version;   /* the file's STV version (op 7: 1 SKIPLONG, 2 GRAD) */
+    void   (*poll)(void); /* if set, called after each block row (the player
+                           * keeps the SD card reading while it decodes) */
 } stv_target;
 
 #define STV_OK          0

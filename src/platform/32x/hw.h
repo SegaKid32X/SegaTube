@@ -137,6 +137,7 @@ uint16_t hw_vblanks(void);
 typedef void (*slave_fn)(int arg);
 void hw_slave_start(slave_fn fn, int arg);
 int  hw_slave_wait(void);
+int  hw_slave_busy(void);
 void hw_cache_purge(void);
 void hw_cache_purge_range(const void *p, uint32_t len);
 

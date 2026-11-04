@@ -245,6 +245,11 @@ void hw_slave_start(slave_fn fn, int arg)
     mb->fn = fn;
 }
 
+int hw_slave_busy(void)
+{
+    return MAILBOX->busy != 0;
+}
+
 int hw_slave_wait(void)
 {
     mailbox_t *mb = MAILBOX;

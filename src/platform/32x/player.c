@@ -276,6 +276,7 @@ static void decode_picture(const uint8_t *pic)
     t.bh = mv.pic_h / 4;
     t.depth = mv.depth;
     t.version = mv.version;
+    t.poll = 0;                         /* (the slave never touches the stream) */
     if (parts > 2) parts = 2;
     if (parts == 2) {
         uint32_t o1 = rd32(q + 4);
@@ -287,8 +288,11 @@ static void decode_picture(const uint8_t *pic)
         hw_slave_start(slave_decode, 0);
     }
     uint32_t o0 = rd32(q);
+    t.poll = stream_poll;               /* keep the SD card busy meanwhile */
     if (stv_decode_part(pic + o0, psize - o0, &t)) decode_errors++;
     if (parts == 2) {
+        while (hw_slave_busy())
+            stream_poll();
         hw_slave_wait();
         if (JOB->result) decode_errors++;
     }

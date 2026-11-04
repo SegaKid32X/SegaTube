@@ -789,7 +789,7 @@ static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int int
     set32(out->p + start + 4, (uint32_t)(out->n - start));
 
     /* the real decoder, on what we wrote, must give the same buffer */
-    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION };
+    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION, 0 };
     for (int k = 0; k < nparts; k++) {
         int e = stv_decode_part(out->p + part_at[k], (uint32_t)(out->n - part_at[k]), &t);
         if (e != STV_OK) {

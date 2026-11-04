@@ -160,7 +160,7 @@ static int decode_p8(streams *s, const stv_target *t)
     uint8_t *dst = rowbase;
     const uint8_t *ops = s->ops, *c = s->col, *m = s->msk, *r = s->raw, *v = s->mv;
 
-#define NEXT() do { dst += 4; if (++col == bw) { col = 0; row++; rowbase += 4 * pitch; dst = rowbase; } } while (0)
+#define NEXT() do { dst += 4; if (++col == bw) { col = 0; row++; rowbase += 4 * pitch; dst = rowbase; if (t->poll) t->poll(); } } while (0)
 #define ROW(k) (*(uint32_t *)(void *)(dst + (k) * pitch))
 
     while (blocks > 0) {
@@ -298,7 +298,7 @@ static int decode_dc(streams *s, const stv_target *t)
     uint8_t *dst = rowbase;
     const uint8_t *ops = s->ops, *c = s->col, *m = s->msk, *r = s->raw, *v = s->mv;
 
-#define NEXT() do { dst += 8; if (++col == bw) { col = 0; row++; rowbase += 4 * pitch; dst = rowbase; } } while (0)
+#define NEXT() do { dst += 8; if (++col == bw) { col = 0; row++; rowbase += 4 * pitch; dst = rowbase; if (t->poll) t->poll(); } } while (0)
 #define W(k, h) (*(uint32_t *)(void *)(dst + (k) * pitch + 4 * (h)))
 
     while (blocks > 0) {

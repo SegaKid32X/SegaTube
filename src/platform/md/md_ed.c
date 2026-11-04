@@ -245,8 +245,12 @@ int RAM ed_list_movies(void)
     return r;
 }
 
+/* where the open file's pointer is after our last read (~0: unknown) */
+static uint32_t file_pos = 0xFFFFFFFFu;
+
 int RAM ed_open(const char *path)
 {
+    file_pos = 0xFFFFFFFFu;
     if (!ed_ok) return ERR_STATUS;
     rv_on();
     cmd_tx(CMD_F_FCLOSE);
@@ -261,6 +265,7 @@ int RAM ed_open(const char *path)
 
 int RAM ed_close(void)
 {
+    file_pos = 0xFFFFFFFFu;
     if (!ed_ok) return ERR_STATUS;
     rv_on();
     cmd_tx(CMD_F_FCLOSE);
@@ -275,15 +280,19 @@ int RAM ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len)
     if (!ed_ok) return ERR_STATUS;
     COMM16(C_FLAGS) |= FL_BUSY;
     rv_on();
-    cmd_tx(CMD_F_FPTR);
-    fifo_wr32(offset);
-    int e = check_status();
+    int e = 0;
+    if (offset != file_pos) {           /* a stream reads on from the last read: no seek */
+        cmd_tx(CMD_F_FPTR);
+        fifo_wr32(offset);
+        e = check_status();
+    }
     if (!e) {
         cmd_tx(CMD_F_FRD_MEM);
         fifo_wr32(cart_addr);
         fifo_wr32(len);
         e = run_dma() ? ERR_TIMEOUT : check_status();
     }
+    file_pos = e ? 0xFFFFFFFFu : offset + len;
     rv_off();
     COMM16(C_FLAGS) &= (uint16_t)~FL_BUSY;
     return e;

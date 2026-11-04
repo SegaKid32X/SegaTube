@@ -185,7 +185,7 @@ static void decode_test(int *row, int kind)
         pq += 512;
     }
     uint32_t psize = stv_rd32(pic + 4), o0 = stv_rd32(pq), o1 = pic[2] > 1 ? stv_rd32(pq + 4) : 0;
-    stv_target tg = { hw_row(0) + mv.pic_x * mv.depth, hw_row_bytes(), mv.pic_w / 4, mv.pic_h / 4, mv.depth, mv.version };
+    stv_target tg = { hw_row(0) + mv.pic_x * mv.depth, hw_row_bytes(), mv.pic_w / 4, mv.pic_h / 4, mv.depth, mv.version, 0 };
     const int reps = 30;
     uint32_t t0 = vticks;
     for (int i = 0; i < reps; i++) {
