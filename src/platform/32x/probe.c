@@ -264,6 +264,22 @@ static void interlace_draw(int b)
     interlace_tables(b);
 }
 
+/* Resync tricks: rewrite the 32X display mode at the start of a field, in
+ * case that restarts the 32X's line timing (the late field is half a line
+ * behind). 0 none, 1 blank+packed every field, 2 only before the blue
+ * buffer's field, 3 only before the red one's, 4 toggle the 240-line bit. */
+static int trick;
+
+static void apply_trick(int next)
+{
+    switch (trick) {
+    case 1: MARS_VDP_MODE = VDP_MODE_BLANK; MARS_VDP_MODE = VDP_MODE_PACKED; break;
+    case 2: if (next == 1) { MARS_VDP_MODE = VDP_MODE_BLANK; MARS_VDP_MODE = VDP_MODE_PACKED; } break;
+    case 3: if (next == 0) { MARS_VDP_MODE = VDP_MODE_BLANK; MARS_VDP_MODE = VDP_MODE_PACKED; } break;
+    case 4: MARS_VDP_MODE = VDP_MODE_PACKED | 0x40; MARS_VDP_MODE = VDP_MODE_PACKED; break;
+    }
+}
+
 static void show_shift(void)
 {
     char t[40], *p = str(t, "BLUE ");
@@ -274,7 +290,9 @@ static void show_shift(void)
     v = shift_px[0];
     *p++ = v < 0 ? '-' : '+';
     p = num(p, (uint32_t)(v < 0 ? -v : v));
-    str(p, " PX      ");
+    p = str(p, " PX  TRICK ");
+    *p++ = (char)('0' + trick);
+    str(p, "   ");
     puts_at(23, 1, t, 1);
 }
 
@@ -303,7 +321,7 @@ static void interlace_test(void)
     md_cmd(CMD_VIDEO, 1, 0, 0);
     puts_at(24, 1, "LINE UP BOTH FIELDS' BARS WITH THE", 0);
     puts_at(25, 1, "RULER: <> BLUE, UP/DN RED, B SWAP", 0);
-    puts_at(26, 1, "START: DONE (PHOTO THIS FIRST)", 1);
+    puts_at(26, 1, "A: NEXT TRICK  START: DONE", 1);
     show_shift();
     int swap = 0, last = -1, changes = 0, samples = 0, par = 0;
     int dirty[2] = { 0, 0 };
@@ -325,6 +343,7 @@ static void interlace_test(void)
         /* the buffer not on screen can take a new line table now */
         int hidden = hw_back_buffer();
         if (dirty[hidden]) { interlace_tables(hidden); dirty[hidden] = 0; }
+        apply_trick(next);
         hw_request_show(next);
         pad_poll();
         uint16_t p = pad_pressed;
@@ -339,8 +358,13 @@ static void interlace_test(void)
             dirty[0] = 1;
             show_shift();
         }
+        if (p & (PAD_A | PAD_C)) {
+            trick = (trick + 1) % 5;
+            show_shift();
+        }
         if (p & PAD_START) break;
     }
+    MARS_VDP_MODE = VDP_MODE_PACKED;
     md_cmd(CMD_VIDEO, 0, 0, 0);
     md_cmd(CMD_CLEAR, 0, 0, 0);
     char t[48], *q = str(t, "ODD FLAG CHANGED ");
