@@ -8,8 +8,8 @@
 #define PLAY_END    1   /* the movie ended */
 #define PLAY_ERROR  2
 
-/* Play movie m in profile kind (KIND_FILM/FULL/I480, falls back to another
- * the movie has). */
+/* Play movie m in profile kind (KIND_FILM/FULL, falls back to the other if
+ * the movie lacks it). */
 int  play_movie(int m, int kind);
 void library_run(void);
 
@@ -17,5 +17,6 @@ void library_run(void);
 void ui_cmd(int cmd, uint16_t p1, uint16_t p2, uint16_t p3);
 extern uint16_t pad_pressed, pad_held;
 void pad_poll(void);
+void pad_flush(void);
 
 #endif

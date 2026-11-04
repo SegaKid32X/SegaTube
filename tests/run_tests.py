@@ -2,8 +2,10 @@
 """Emulator tests: boot the test ROMs in PicoDrive and drive them.
 
 Each tests/scripts/*.txt is run by tests/harness (a small libretro host). A
-line "# rom: long" picks rom/segatube-long.32x, else rom/segatube-test.32x.
-Every screenshot must be lit and colourful (the black-screen guard), the
+line "# rom: long" picks rom/segatube-long.32x, else rom/segatube-test.32x;
+"# pad6" plugs in a 6-button pad.
+Every screenshot must be lit and colourful (the black-screen guard; "text_"
+shots need only be lit, "allow_dark" ones neither), the
 screenshots of a script must not all be the same, and the harness must exit 0
 (its expect/wait commands fail it otherwise).
 
@@ -53,16 +55,19 @@ def check_shot(path):
 def run(script):
     name = os.path.splitext(os.path.basename(script))[0]
     rom = ROMS["test"]
+    env = dict(os.environ)
     for line in open(script):
         if line.startswith("# rom:"):
             rom = ROMS[line.split(":", 1)[1].strip()]
+        if line.startswith("# pad6"):           # a 6-button pad (X Y Z MODE)
+            env["HARNESS_PAD6"] = "1"
     out = os.path.join(OUT, name)
     os.makedirs(out, exist_ok=True)
     for f in os.listdir(out):
         if f.endswith(".ppm"):
             os.remove(os.path.join(out, f))
     p = subprocess.run([HARNESS, CORE, os.path.join(ROOT, rom), script, out],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=env)
     failures = []
     if p.returncode:
         failures.append(f"harness exit {p.returncode}: {p.stderr.strip()[-300:]}")
@@ -71,6 +76,8 @@ def run(script):
     for s in shots:
         problems, crc = check_shot(os.path.join(out, s))
         crcs.add(crc)
+        if s.startswith("text_"):           # a text panel: lit, few colours
+            problems = [p for p in problems if not p.endswith("colours")]
         if problems and not s.startswith("allow_dark"):
             failures.append(f"{s}: {', '.join(problems)}")
     if len(shots) > 1 and len(crcs) == 1:

@@ -46,10 +46,8 @@
 #define C_PAD       0xC
 #define C_VBL       0xE
 
-#define FL_ODD      0x0001
 #define FL_ED       0x0002
 #define FL_VFS      0x0004
-#define FL_INTERLACE 0x0008
 #define FL_PAD3     0x0010
 #define FL_BUSY     0x0020
 
@@ -57,21 +55,18 @@
 #define CMD_SD_INIT 1
 #define CMD_OPEN    2
 #define CMD_READ    3
-#define CMD_VIDEO   4
 #define CMD_OSD     5
 #define CMD_LIBRARY 6
 #define CMD_MESSAGE 7
 #define CMD_CLEAR   8
 #define CMD_TITLE   9
 #define CMD_PUTS    10
-#define CMD_EDDIAG  11
-#define CMD_EDBLIND 12
 #define CMD_EDRV    13
+#define CMD_HELP    14
 
 #define KIND_INFO   0
 #define KIND_FILM   1
 #define KIND_FULL   2
-#define KIND_I480   3
 
 #define OSD_BAR     0x0100
 #define OSD_SCRUB   0x0200

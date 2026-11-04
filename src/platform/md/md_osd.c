@@ -1,10 +1,12 @@
-/* md_osd.c - SegaTube's text layer: the Mega Drive VDP's plane A, over the
+/* md_osd.c - SegaTube's text layer: the Mega Drive VDP's planes, over the
  * 32X picture.
  *
- * Plane A is tile 0 (transparent) except where text is drawn, so the 32X
- * video shows everywhere else (the 32X priority bit is 0: the Mega Drive
- * layer is in front where it is not transparent). The SH-2s never draw text;
- * they ask for it (CMD_OSD, CMD_LIBRARY, CMD_MESSAGE) and the 68000 redraws.
+ * Both planes are tile 0 (transparent) except where something is drawn, so
+ * the 32X video shows everywhere else (the 32X priority bit is 0: the Mega
+ * Drive layer is in front where it is not transparent). Text goes on plane A;
+ * panels behind text go on plane B (the font's background is transparent).
+ * The SH-2s never draw text; they ask for it (CMD_OSD, CMD_LIBRARY,
+ * CMD_MESSAGE, CMD_HELP) and the 68000 redraws.
  */
 #include "md.h"
 #include "osd_tiles.h"
@@ -13,6 +15,7 @@ extern const uint8_t osd_tiles[], osd_tiles_end[];
 extern const uint16_t osd_palette[];
 
 #define PLANE_A     0xC000
+#define PLANE_B     0xE000
 #define COLS        40
 #define ROWS        28
 
@@ -38,19 +41,30 @@ void osd_init(void)
     for (int i = 0; i < words; i++) VDP_DATA = t[i];
     VDP_CTRL32 = 0xC0000000u;
     for (int i = 0; i < 32; i++) VDP_DATA = osd_palette[i];     /* lines 0 and 1 */
+    VDP_CTRL32 = 0x40000010u;                                   /* no vertical scroll */
+    for (int i = 0; i < 40; i++) VDP_DATA = 0;
 }
 
 void osd_clear(void)
 {
     vram_addr(PLANE_A);
     for (int i = 0; i < 64 * ROWS; i++) VDP_DATA = 0;
+    vram_addr(PLANE_B);
+    for (int i = 0; i < 64 * ROWS; i++) VDP_DATA = 0;
+}
+
+/* tile across columns c0 .. c1-1 of a row of a plane */
+static void fill(uint16_t plane, int row, int c0, int c1, uint16_t tile)
+{
+    vram_addr((uint16_t)(plane + (row * 64 + c0) * 2));
+    for (int c = c0; c < c1; c++) VDP_DATA = tile;
 }
 
 static void clear_rows(int r0, int r1)
 {
     for (int r = r0; r < r1; r++) {
-        vram_addr((uint16_t)(PLANE_A + r * 128));
-        for (int c = 0; c < 64; c++) VDP_DATA = 0;
+        fill(PLANE_A, r, 0, 64, 0);
+        fill(PLANE_B, r, 0, 64, 0);
     }
 }
 
@@ -66,10 +80,11 @@ void osd_text(int col, int row, const char *s, int high)
     }
 }
 
-static void fill_row(int row, int tile)
+/* a panel row: the panel behind, no text in front */
+static void panel_row(int row)
 {
-    vram_addr((uint16_t)(PLANE_A + row * 128));
-    for (int c = 0; c < COLS; c++) VDP_DATA = (uint16_t)(0x8000 | tile);
+    fill(PLANE_B, row, 0, COLS, 0x8000 | T_PANEL);
+    fill(PLANE_A, row, 0, COLS, 0);
 }
 
 static void time_string(char *o, unsigned s)
@@ -98,20 +113,24 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
 {
     static uint16_t last_flags = 0xFFFF;
     if (flags & OSD_HIDE) {
-        if (last_flags != 0xFFFF && !(last_flags & OSD_HIDE))
+        if (last_flags != 0xFFFF && !(last_flags & OSD_HIDE)) {
             clear_rows(23, ROWS);
+            clear_rows(1, 2);
+        }
         last_flags = flags;
         return;
     }
+    if ((last_flags == 0xFFFF || (last_flags & OSD_HIDE)) && !pad_3button())
+        center(1, "PRESS MODE FOR CONTROLS", 0);    /* (B is "back" here) */
     if ((last_flags ^ flags) & (OSD_HIDE | OSD_HINTS | OSD_SCRUB))
         clear_rows(23, ROWS);
     last_flags = flags;
-    static const char *const mode_name[4] = { "FILM", "FULL", "480I", "" };
+    static const char *const mode_name[4] = { "FILM", "FULL", "", "" };
     char t[12];
     /* row 24: title and mode, on the panel */
-    fill_row(24, T_PANEL);
-    fill_row(25, T_PANEL);
-    fill_row(26, T_PANEL);
+    panel_row(24);
+    panel_row(25);
+    panel_row(26);
     if (movie >= 0 && movie < movie_count) {
         char name[29];
         int i = 0;
@@ -123,7 +142,7 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
     /* row 25: icon, time, bar, duration */
     static const uint8_t icons[6] = { 0, T_PLAY, T_PAUSE, T_FF, T_REW, T_STOP };
     int ic = flags & OSD_ICON;
-    put(1, BAR_ROW, ic && ic < 6 ? icons[ic] : T_PANEL);
+    put(1, BAR_ROW, ic && ic < 6 ? icons[ic] : 0);
     time_string(t, pos);
     osd_text(2, BAR_ROW, t, 0);
     int fill = dur ? (int)((uint32_t)pos * (BAR_LEN * 8) / dur) : 0;
@@ -148,7 +167,7 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
     } else if (flags & OSD_SCRUB) {
         osd_text(2, 26, "LEFT/RIGHT SEEK  A GO  B CANCEL", 0);
     } else if (flags & OSD_HINTS) {
-        osd_text(1, 26, "START PAUSE <> SCAN DOWN SEEK C MODE", 0);
+        osd_text(1, 26, "START PAUSE  <> SCAN  DOWN SEEK", 0);
     }
 }
 
@@ -157,7 +176,9 @@ void osd_library(int first, int cursor, uint16_t dur, int mode)
 {
     char t[24];
     osd_clear();
-    center(1, "SEGATUBE", 1);
+    osd_text(2, 1, "SEGATUBE", 1);
+    if (pad_3button()) osd_text(19, 1, "PRESS B FOR CONTROLS", 0);
+    else osd_text(16, 1, "PRESS MODE FOR CONTROLS", 0);
     for (int i = 0; i < 4; i++) {
         int m = first + i;
         if (m >= movie_count) break;
@@ -183,8 +204,8 @@ void osd_library(int first, int cursor, uint16_t dur, int mode)
         time_string(t, dur);
         osd_text(31, 26, t, 0);
     }
-    static const char *const modes[3] = { "C MODE: FILM", "C MODE: FULL", "C MODE: 480I" };
-    osd_text(12, 26, modes[mode < 3 ? mode : 0], 0);
+    static const char *const modes[2] = { "C MODE: FILM", "C MODE: FULL" };
+    osd_text(12, 26, modes[mode == 1], 0);
 }
 
 void osd_message(int msg, int value)
@@ -201,6 +222,55 @@ void osd_message(int msg, int value)
         hex_string(h, (uint32_t)value, 4);
         center(14, h, 0);
     }
+}
+
+/* a heading: words with single spaces (a control's line has a gap) */
+static int is_heading(const char *s)
+{
+    if (!*s) return 0;
+    for (; s[0] && s[1]; s++)
+        if (s[0] == ' ' && s[1] == ' ') return 0;
+    return 1;
+}
+
+/* The controls, on a panel over the picture (MODE; B in the library) */
+void osd_help(int show)
+{
+    static const char *const lines[] = {
+        "CONTROLS",
+        "",
+        "IN THE LIBRARY",
+        "D-PAD        CHOOSE A MOVIE",
+        "A OR START   PLAY",
+        "C            SWITCH FILM / FULL",
+        "B OR MODE    THESE CONTROLS",
+        "",
+        "WHILE WATCHING",
+        "START        PAUSE / PLAY",
+        "A            SHOW THE TIME BAR",
+        "RIGHT/LEFT   FAST FORWARD/REWIND",
+        "             AGAIN: FASTER",
+        "DOWN         SEEK: A GO, B CANCEL",
+        "C            SWITCH FILM / FULL",
+        "MODE         THESE CONTROLS",
+        "X / Z        BACK 10S / AHEAD 30S",
+        "B            BACK TO THE LIBRARY",
+        "",
+        "PRESS ANY BUTTON TO CLOSE",
+    };
+    /* text on rows 3 .. 22, the panel on rows 2 .. 23 (over the library
+     * cursor's frame on lines 22-23, clear of the time bar from row 24) */
+    const int top = 3, n = (int)(sizeof lines / sizeof lines[0]);
+    if (!show) {
+        clear_rows(top - 1, top + n + 1);
+        return;
+    }
+    for (int r = top - 1; r < top + n + 1; r++) {
+        fill(PLANE_B, r, 2, 38, 0x8000 | T_PANEL);
+        fill(PLANE_A, r, 2, 38, 0);
+    }
+    for (int i = 0; i < n; i++)
+        osd_text(4, top + i, lines[i], is_heading(lines[i]));
 }
 
 void osd_boot(const char *line1, const char *line2)

@@ -86,7 +86,16 @@ static void load_page(int first)
     }
 }
 
-static const char *const kind_hint[3] = { "FILM", "FULL", "480I" };
+/* The controls pop-up (MODE, or B for a 3-button pad) until a button is pressed */
+static void help(void)
+{
+    md_cmd(CMD_HELP, 1, 0, 0);
+    do {
+        hw_wait_vblank();
+        pad_poll();
+    } while (!pad_pressed);
+    md_cmd(CMD_HELP, 0, 0, 0);
+}
 
 void library_run(void)
 {
@@ -120,7 +129,6 @@ void library_run(void)
             uint32_t dur = info_ok[i] ? infos[i].duration_ms / 1000 : 0;
             md_cmd(CMD_LIBRARY, (uint16_t)(first | (kind - KIND_FILM) << 12), (uint16_t)cursor,
                    (uint16_t)(dur > 65535 ? 65535 : dur));
-            (void)kind_hint;
             int go = 0;
             for (;;) {
                 hw_wait_vblank();
@@ -135,15 +143,17 @@ void library_run(void)
                 if (c < 0) c = 0;
                 if (c >= count) c = count - 1;
                 if (p & PAD_C) {
-                    kind = kind == KIND_I480 ? KIND_FILM : kind + 1;
+                    kind = kind == KIND_FILM ? KIND_FULL : KIND_FILM;
                     break;
                 }
+                if (p & (PAD_MODE | PAD_B)) { help(); break; }
                 if (p & (PAD_A | PAD_START)) { go = 1; break; }
                 if (c != cursor) { cursor = c; break; }
             }
             if (go) {
                 md_cmd(CMD_CLEAR, 0, 0, 0);
                 play_movie(cursor, kind);
+                pad_flush();
                 md_cmd(CMD_CLEAR, 0, 0, 0);
                 library_mode();
                 first = -1;

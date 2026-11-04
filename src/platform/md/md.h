@@ -45,10 +45,8 @@
 #define C_PAD       0xC
 #define C_VBL       0xE
 
-#define FL_ODD      0x0001  /* the field on screen now is odd (480i) */
 #define FL_ED       0x0002  /* a Mega EverDrive answered */
 #define FL_VFS      0x0004  /* movies are built into the ROM (test builds) */
-#define FL_INTERLACE 0x0008 /* the VDP is in interlace mode */
 #define FL_PAD3     0x0010  /* a 3-button pad */
 #define FL_BUSY     0x0020  /* the cartridge bus is lent to the EverDrive */
 
@@ -56,22 +54,21 @@
 #define CMD_SD_INIT 1   /* -> number of movies (0xFE: no EverDrive, 0xFF: error) */
 #define CMD_OPEN    2   /* P1 movie, P2 kind | part << 8 (KIND_*) -> 0 or error */
 #define CMD_READ    3   /* P1:P2 file offset, P3 slot << 8 | 256-byte units (0 = 128) */
-#define CMD_VIDEO   4   /* P1 bit 0: interlace */
+                        /* 4: unused (was the 480i switch) */
 #define CMD_OSD     5   /* P1 OSD_* flags, P2 position s, P3 duration s */
 #define CMD_LIBRARY 6   /* P1 first movie | mode << 12, P2 cursor, P3 duration s of the cursor's */
 #define CMD_MESSAGE 7   /* P1 MSG_*, P2 value */
 #define CMD_CLEAR   8   /* clear the text layer */
 #define CMD_TITLE   9   /* P1 movie whose name the OSD shows */
 #define CMD_PUTS    10  /* P1 row << 8 | col, P2 two characters, P3 1: highlighted */
-#define CMD_EDDIAG  11  /* P1 text row: the EverDrive's registers on screen -> 1 if it answered */
-#define CMD_EDRV     13 /* P1 text row: the I/O with RV = 1 -> 1 if it answered */
-#define CMD_EDBLIND 12  /* P1 text row: a transfer without status reads (PROBE.BIN) -> 1 if it worked */
+                        /* 11, 12: unused (EverDrive experiments) */
+#define CMD_EDRV    13  /* P1 text row: the I/O with RV = 1 -> 1 if it answered */
+#define CMD_HELP    14  /* P1 1: the controls panel, 0: away */
 #define CMD_CRASH   15
 
 #define KIND_INFO   0
 #define KIND_FILM   1
 #define KIND_FULL   2
-#define KIND_I480   3
 
 /* Where CMD_READ puts data: cartridge memory beyond the ROM, which the
  * SH-2s read. Slots 0-15: the stream ring, 16-31: the shared area. */
@@ -83,7 +80,7 @@
 #define OSD_SPEED   0x00F0  /* x 2^n while scanning */
 #define OSD_BAR     0x0100  /* show the time bar */
 #define OSD_SCRUB   0x0200  /* the scrub bar: P2 is the cursor */
-#define OSD_MODE    0x0C00  /* picture mode label: 0 film, 1 full, 2 480i */
+#define OSD_MODE    0x0C00  /* picture mode label: 0 film, 1 full */
 #define OSD_HIDE    0x1000  /* nothing at all */
 #define OSD_HINTS   0x2000  /* show the button hints */
 
@@ -140,5 +137,7 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie);
 void osd_library(int first, int cursor, uint16_t dur, int mode);
 void osd_message(int msg, int value);
 void osd_boot(const char *line1, const char *line2);
+void osd_help(int show);
+int  pad_3button(void);            /* the pad has no X Y Z MODE */
 
 #endif

@@ -8,7 +8,6 @@
  *   MOVIES/<name>/INFO.STI    title, poster, scrub thumbnails, the profiles
  *   MOVIES/<name>/FILM.STV    one file per picture profile (any subset)
  *   MOVIES/<name>/FULL.STV
- *   MOVIES/<name>/I480.STV
  *
  * The EverDrive's file pointer is 32-bit, so a profile file stays under
  * 4 GB: a longer one continues in FILM.ST1, FILM.ST2 ... (the index says which
@@ -29,7 +28,7 @@
  *   u16 audio_samples          stereo samples of ADPCM in this record (main part)
  *   u16 preroll_samples        first record of a chunk only: audio played
  *                              only after a seek (see DESIGN.md), else 0
- *   u16 pic_count              pictures: 1 (progressive) or 2 (480i fields)
+ *   u16 pic_count              pictures: 1 (2: two fields, unused)
  *   u16 flags                  STV_REC_*
  *   stv_adpcm_state state[2]   (if STV_REC_ADPCM_STATE) L and R state to load
  *                              before the main audio part
@@ -67,7 +66,7 @@
 /* Profiles */
 #define STV_PROF_FILM       0   /* direct colour (RGB555), up to 320x204, 24 fps */
 #define STV_PROF_FULL       1   /* 256 colours a scene, 320x224, up to 30 fps */
-#define STV_PROF_I480       2   /* 256 colours, 320x448 interlaced (two fields) */
+#define STV_PROF_I480       2   /* reserved (was 480i: the 32X draws one field half a line late) */
 #define STV_PROF_COUNT      3
 
 /* Pixel depth of a profile's pictures */

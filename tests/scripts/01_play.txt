@@ -13,7 +13,5 @@ run 30
 shot full_b
 press c 6
 run 70
-shot i480_a
-run 30
-shot i480_b
+shot film_again
 telem

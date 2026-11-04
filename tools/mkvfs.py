@@ -7,13 +7,13 @@ offset at 0x1C8). Both CPUs read it (src/platform/md/md_vfs.c,
 src/platform/32x/io.c).
 
 usage: mkvfs.py ROM_IN ROM_OUT MOVIE_DIR [MOVIE_DIR ...]
-       (each MOVIE_DIR holds INFO.STI and any of FILM.STV FULL.STV I480.STV)
+       (each MOVIE_DIR holds INFO.STI and FILM.STV and/or FULL.STV)
 """
 import struct
 import sys
 from pathlib import Path
 
-KINDS = ["INFO.STI", "FILM.STV", "FULL.STV", "I480.STV"]
+KINDS = ["INFO.STI", "FILM.STV", "FULL.STV", "-"]    # (the 4th slot: unused)
 NAME_LEN = 48
 MAX_ROM = 4 * 1024 * 1024
 

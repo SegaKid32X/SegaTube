@@ -4,9 +4,9 @@ A movie player for the **Sega 32X** with a **Mega EverDrive PRO**: put converted
 movies on the SD card, pick one from a poster library, and watch it with VHS-style
 fast forward/rewind, pause and a scrubber with thumbnails.
 
-> Status: works in the PicoDrive emulator (library, all three modes, sound, pause,
-> fast forward/rewind, scrubber). Not yet tested on a real console: see
-> "Testing on your console" below.
+> Status: plays from the SD card on a real console (NTSC 32X, Mega EverDrive PRO)
+> and in the PicoDrive emulator: the library, both modes, sound, pause, fast
+> forward/rewind and the scrubber.
 
 ## Picture modes
 
@@ -14,21 +14,26 @@ fast forward/rewind, pause and a scrubber with thumbnails.
 |---|---|---|
 | **FILM** | 15-bit direct colour: any of 32,768 colours per pixel | up to 320x200 (fits widescreen films); the "LaserDisc" mode |
 | **FULL** | 256 colours per scene, from 32,768 | the full 320x224 screen |
-| **480i** | 256 colours per scene, 320x448 interlaced | every TV field shows its own lines, like VHS; *experimental* until tested on hardware |
 
 Press **C** while watching to switch modes (the movie keeps its place).
 
+480i was tried and dropped: the 32X draws one of the two TV fields half a
+scanline late, so the fields never line up.
+
 ## Controls
+
+Press **Mode** (6-button pad) for a panel with all the controls, in the library
+or while watching; with a 3-button pad, press **B** in the library.
 
 | Button | Library | Playing |
 |---|---|---|
 | D-pad | choose a movie | **Right/Left**: fast forward / rewind (press again: 2x up to 32x) |
 | | | **Down/Up**: the scrubber (Left/Right move, hold to speed up; A go, B cancel) |
 | A / Start | play | Start: pause; A: show the time bar |
-| B | | back to the library |
+| B | the controls panel | back to the library |
 | C | choose the picture mode | switch picture mode |
 | X / Z (6-button) | | back 10 s / ahead 30 s |
-| Mode (6-button) | | 480i: swap the field order if the picture looks jagged |
+| Mode (6-button) | the controls panel | the controls panel (the movie waits) |
 
 ## Converting movies
 
@@ -45,10 +50,9 @@ python3 converter/segatube_convert.py "My Movie.mp4" --sd /Volumes/EVERDRIVE
 ```
 
 Each movie becomes `MOVIES/<title>/` with `INFO.STI` (title, poster, thumbnails)
-and `FILM.STV`, `FULL.STV`, `I480.STV`. All three modes take about 1 GB per hour
-of film each at the default quality; `--modes film,full` leaves one out. The modes
-are encoded at the same time; a 2-hour film takes roughly 45 minutes on a 4-core
-computer.
+and `FILM.STV`, `FULL.STV`. Each mode takes roughly 1-2 GB per hour of film at
+the default quality; `--modes film` or `--modes full` makes only one. The modes
+are encoded at the same time.
 
 ## Testing on your console
 
@@ -57,12 +61,14 @@ computer.
 2. Run **segatube-probe.32x** (the hardware test). It shows: whether the EverDrive
    answered, the SD read speed (KB/s), the speed with the copy into the 32X's
    memory, whether a repeated read gives the same data, the time to decode one
-   picture, and plays a 2-second tone. Photograph that screen. Press A for the
-   480i test: steady fine purple stripes on the left and a smooth diagonal mean
-   480i works; flickering red/blue means it does not (B swaps the fields).
+   picture, and plays a 2-second tone. Photograph that screen; A runs it again.
 3. Run **segatube.32x**: the library should list your movie.
 4. If the EverDrive part fails, `segatube-test.32x` has a short test movie built
    in and plays without the SD card.
+
+Keep other players' `.rbf` files (MegaColor's `mega-pro.rbf`) out of the folder
+that holds `segatube.32x`: the EverDrive loads an `.rbf` next to a ROM into its
+FPGA, and the screen stays blank.
 
 ## Building
 

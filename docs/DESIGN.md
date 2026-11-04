@@ -8,7 +8,7 @@ How the player, the movie format and the converter fit together, and why.
 |---|---|
 | Master SH-2 | reads records, decodes audio, decodes the top part of each picture, UI, timing |
 | Slave SH-2 | decodes the bottom part of each picture; its DMA channel 1 feeds the PWM |
-| 68000 | the SD card (Mega EverDrive PRO I/O), the pad, the text layer, the 480i field parity |
+| 68000 | the SD card (Mega EverDrive PRO I/O), the pad, the text layer |
 | SDRAM (256 KiB) | code (~20 KiB), stream buffer 128 KiB, audio ring 32 KiB, tables |
 | Frame buffers | two, swapped; 256 colours (320x224) or direct colour (up to 320x203) |
 | Cartridge memory | the EverDrive writes file data to 0x380000 (stream) and 0x300000 (shared) |
@@ -21,10 +21,11 @@ SDRAM ends at about `0x06032000` of the `0x0603C000` allowed (`tests/verify_rom.
   words and 65,280 pixel words, so at most 204 rows; pictures are up to 320x200,
   the rest of the 224 lines show a black row through the line table.
 - **FULL**: 256 colours, a palette per chunk (scene), 320x224.
-- **480i**: like FULL, but each frame is two field pictures of up to 320x224:
-  the even field's buffer is shown in even TV fields and the odd one in odd fields
-  (the Mega Drive VDP in interlace mode 1 makes the TV interlace). Each field
-  picture is decoded into its buffer during the other field.
+
+480i (two 320x224 field pictures a frame, one frame buffer per field) was built
+and dropped: on the console the 32X draws one of the two fields half a scanline
+(about 210 pixels) late, so the fields never line up. The format keeps profile
+number 2 and two-picture records reserved.
 
 The encoder reserves palette entry 0 as black (letterbox and pillarbox borders).
 
@@ -37,10 +38,9 @@ present, a 128x72 poster, 96x54 scrub thumbnails) and one `.STV` file per mode
 A profile file is a 4 KiB header, a chunk index, then chunks of about one second.
 A chunk starts with intra pictures, so playback can start at any chunk:
 
-- progressive: the first **two** frames are intra (frame f is decoded into the
-  buffer that held frame f-2, so after a seek both buffers need a fresh picture);
-- 480i: the first record's two fields are intra;
-- the first picture carries the chunk's palette (FULL/480i);
+- the first **two** frames are intra (frame f is decoded into the buffer that
+  held frame f-2, so after a seek both buffers need a fresh picture);
+- the first picture carries the chunk's palette (FULL);
 - the first record carries "preroll" audio for its first quarter second.
 
 Each record is one frame: audio (IMA ADPCM, 4 bits, stereo, 22,050 Hz, carried a
@@ -89,30 +89,35 @@ ROM instead (`tools/mkvfs.py`), read through the same calls.
 
 ## 6. Timing
 
-The audio ring's playback position is the clock. A progressive frame goes on
-screen at the vblank nearest its time (24 fps shows as 3:2 on NTSC, 30 fps as 2:2);
-in 480i a field is shown every vblank and each new field picture appears when its
-frame's time has come. A player more than half a second late skips to the next
-chunk.
+The audio ring's playback position is the clock. A frame goes on screen at the
+vblank nearest its time (24 fps shows as 3:2 on NTSC, 30 fps as 2:2). A player
+more than half a second late skips to the next chunk.
 
 ## 7. The COMM protocol (`src/platform/md/md.h`)
 
 One command at a time from the master (`C_CMD`: pad ack, sequence, command;
 `C_P1..3` parameters); the 68000 answers in `C_REPLY`. The 68000 also publishes the
-pad (with presses latched until acknowledged), a vblank counter and flags (field
-parity, EverDrive present, built-in movies).
+pad (with presses latched until acknowledged; the player drops presses made
+while nobody was reading, e.g. during "THE END"), a vblank counter and flags
+(EverDrive present, built-in movies, 3-button pad, cartridge bus lent to the
+EverDrive).
+
+The text layer is the Mega Drive VDP in front of the 32X picture: text on plane
+A, the panels behind it (time bar, the controls panel) on plane B, since the
+font's background is transparent.
 
 ## 8. Testing
 
 - `make check`: ROM checks (header, checksum, layout, marker strings), host tests
   (every mode decodes, every seek decodes, decoder fuzzing under ASan) and the
-  PicoDrive scripts (`tests/scripts`): the library, all three modes, pause,
-  fast forward, rewind, the scrubber, the end of a movie, the hardware test ROM.
+  PicoDrive scripts (`tests/scripts`): the library, both modes, pause,
+  fast forward, rewind, the scrubber, the end of a movie, the controls panel
+  (6-button and 3-button pads), the hardware test ROM.
 - `rom/segatube-probe.32x` (`make probe`): on the console, measures the SD card
-  streaming rate, decode time, sound and 480i (see the README).
+  streaming rate, decode time and sound (see the README).
 
 Not covered by the emulator: the EverDrive's SD access (no emulator has it),
-interlace (PicoDrive shows one field), the console's real SH-2 bus timing.
+the console's real SH-2 bus timing.
 
 ## 9. Toolchain
 

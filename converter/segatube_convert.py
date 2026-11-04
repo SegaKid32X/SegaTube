@@ -7,14 +7,13 @@ scrub thumbnails) and one file per picture mode:
 
     FILM.STV  15-bit colour (32,768 colours on screen), up to 320x200
     FULL.STV  256 colours chosen per scene, full 320x224
-    I480.STV  256 colours, 320x448 interlaced (480i)
 
 Usage:
     segatube_convert.py                         the window (drag files in)
     segatube_convert.py movie.mp4 ... --sd E:\\   convert onto an SD card
     segatube_convert.py movie.mp4 --out folder   convert into a folder
 
-Options: --modes film,full(,i480)   --quality 1-10   --rate-cap BYTES_PER_S
+Options: --modes film,full   --quality 1-10   --rate-cap BYTES_PER_S
          --title TEXT (one input)  --start S --duration S (a part of the video)
 
 Needs ffmpeg (bundled in the release builds; otherwise on the PATH or from the
@@ -36,8 +35,8 @@ from pathlib import Path
 
 HERE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
-PROFILES = {"film": 0, "full": 1, "i480": 2}
-FILE_NAMES = {"film": "FILM", "full": "FULL", "i480": "I480"}
+PROFILES = {"film": 0, "full": 1}
+FILE_NAMES = {"film": "FILM", "full": "FULL"}
 
 # Mega Drive H40 pixels on a 4:3 screen: 320 across, 224 lines tall
 PAR = (4 / 3) / (320 / 224)          # displayed width / height of one pixel
@@ -127,11 +126,10 @@ def probe(ffmpeg: str, path: Path) -> Source:
 @dataclass
 class Geometry:
     w: int          # picture width (pixels)
-    h: int          # picture height: rows (FILM/FULL) or frame lines (I480)
+    h: int          # picture height (rows)
     x: int          # screen position
     y: int
     fps: Fraction
-    temporal: bool  # I480: fields from successive source frames
 
 
 def fit(dar: float, max_w: int, max_h: int, par: float, h_step: int) -> tuple[int, int]:
@@ -148,19 +146,9 @@ def fit(dar: float, max_w: int, max_h: int, par: float, h_step: int) -> tuple[in
 
 def geometry(mode: str, src: Source) -> Geometry:
     fps = min(src.fps, Fraction(30000, 1001))
-    if mode == "film":
-        w, h = fit(src.dar, 320, 200, PAR, 4)
-        return Geometry(w, h, (320 - w) // 2, (224 - h) // 2, fps, False)
-    if mode == "full":
-        w, h = fit(src.dar, 320, 224, PAR, 4)
-        return Geometry(w, h, (320 - w) // 2, (224 - h) // 2, fps, False)
-    # i480: 448 lines in the height of 224; each field is half of them
-    w, h = fit(src.dar, 320, 448, PAR * 2, 8)
-    temporal = src.fps > 45
-    fps = src.fps / 2 if temporal else fps
-    if temporal and fps > Fraction(30000, 1001):
-        fps = Fraction(30000, 1001)
-    return Geometry(w, h, (320 - w) // 2, (224 - h // 2) // 2, fps, temporal)
+    # FILM: direct colour has room for 200 rows; FULL: the whole screen
+    w, h = fit(src.dar, 320, 200 if mode == "film" else 224, PAR, 4)
+    return Geometry(w, h, (320 - w) // 2, (224 - h) // 2, fps)
 
 
 # ---------------------------------------------------------------- INFO.STI
@@ -247,23 +235,17 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
 
     def encode(mode):
         g = geometry(mode, src)
-        lines = g.h
-        out_fps = g.fps * (2 if g.temporal else 1)
         frames = int(length * float(g.fps))
-        vf = (f"scale={g.w}:{lines}:flags=lanczos,setsar=1,"
-              f"fps={out_fps.numerator}/{out_fps.denominator},format=rgb24")
-        field_h = lines // 2 if mode == "i480" else lines
-        log(f"  {FILE_NAMES[mode]}: {g.w}x{lines} at {float(g.fps):.3f} fps"
-            f"{' (fields from successive frames)' if g.temporal else ''}")
+        vf = (f"scale={g.w}:{g.h}:flags=lanczos,setsar=1,"
+              f"fps={g.fps.numerator}/{g.fps.denominator},format=rgb24")
+        log(f"  {FILE_NAMES[mode]}: {g.w}x{g.h} at {float(g.fps):.3f} fps")
         dec = subprocess.Popen([ffmpeg, "-v", "error", "-ss", str(start), "-t", str(length),
                                 "-i", str(src.path), "-an", "-vf", vf, "-f", "rawvideo", "-"],
                                stdout=subprocess.PIPE)
-        cmd = [stvenc, "--profile", mode, "--size", f"{g.w}x{field_h}", "--pos", f"{g.x},{g.y}",
+        cmd = [stvenc, "--profile", mode, "--size", f"{g.w}x{g.h}", "--pos", f"{g.x},{g.y}",
                "--fps", f"{g.fps.numerator}/{g.fps.denominator}", "--frames", str(frames),
                "--title", title, "--quality", str(quality), "--rate-cap", str(rate_cap),
                "--out", str(folder / FILE_NAMES[mode]), "-v"]
-        if g.temporal:
-            cmd.append("--temporal-fields")
         if src.has_audio:
             cmd += ["--audio", str(audio), "--audio-rate", str(AUDIO_RATE)]
         enc = subprocess.Popen(cmd, stdin=dec.stdout, stderr=subprocess.PIPE, text=True)
@@ -314,7 +296,7 @@ def run_gui(prefill: list[Path] | None = None) -> None:
     files: list[Path] = []
     dest = tk.StringVar()
     q = tk.DoubleVar(value=6)
-    mode_vars = {m: tk.BooleanVar(value=m != "i480") for m in PROFILES}   # (480i: on hold)
+    mode_vars = {m: tk.BooleanVar(value=True) for m in PROFILES}
 
     frm = ttk.Frame(root, padding=12)
     frm.grid(sticky="nsew")
@@ -341,7 +323,7 @@ def run_gui(prefill: list[Path] | None = None) -> None:
     ttk.Button(frm, text="Choose...", command=choose_dest).grid(row=3, column=2)
     mf = ttk.Frame(frm)
     mf.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
-    for m, label in (("film", "Film (15-bit colour)"), ("full", "Full (256 colours)"), ("i480", "480i (experimental)")):
+    for m, label in (("film", "Film (15-bit colour)"), ("full", "Full (256 colours)")):
         ttk.Checkbutton(mf, text=label, variable=mode_vars[m]).pack(side="left", padx=4)
     ttk.Label(frm, text="Quality").grid(row=5, column=0, sticky="w")
     ttk.Scale(frm, from_=1, to=10, variable=q).grid(row=5, column=1, sticky="we")
@@ -388,7 +370,7 @@ def main() -> int:
     ap.add_argument("--sd", type=Path, help="the SD card's root folder")
     ap.add_argument("--out", type=Path, help="a folder (MOVIES/ is made inside it)")
     ap.add_argument("--modes", default="film,full",
-                    help="film,full (default); i480 is experimental: the 32X cannot draw one of its fields")
+                    help="film,full (default), or just one of them")
     ap.add_argument("--quality", type=float, default=6)
     ap.add_argument("--rate-cap", type=int, default=900000,
                     help="bytes per second the EverDrive can stream (default 900000)")

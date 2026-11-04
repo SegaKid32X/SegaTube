@@ -9,7 +9,7 @@
  *   8   u32 count
  *   12  u32 reserved
  *   16  count entries of 80 bytes: name[48], then u32 offset[4] and u32 size[4]
- *       for INFO.STI, FILM.STV, FULL.STV, I480.STV (offsets from the VFS start,
+ *       for INFO.STI, FILM.STV, FULL.STV and one unused (offsets from the VFS start,
  *       0 = absent)
  */
 #include "md.h"

@@ -6,8 +6,8 @@
  * boot ROMs' "M_OK"/"S_OK" and release the master SH-2.
  *
  * Then, forever: at each vblank, read the pad (latching fresh presses until
- * the SH-2 acknowledges them), count, and publish the TV field's parity; in
- * between, carry out the master's commands (see md.h).
+ * the SH-2 acknowledges them) and count; in between, carry out the master's
+ * commands (see md.h).
  */
 #include "md.h"
 
@@ -16,8 +16,6 @@ int  movie_count;
 volatile uint16_t vblanks;
 
 static uint16_t latched, last_pad, last_ack;
-static uint16_t vdp_reg12 = 0x8C81;
-static int il_trick;            /* 1: rewrite register 12, 2: pulse the display, each vblank */
 #ifdef PAD_TEST
 /* hardware test only: makes the 68000 program bigger (does size matter?) */
 const uint8_t pad_test[3800] = { 1, 2, 3 };
@@ -26,7 +24,6 @@ static int pad6;
 static uint16_t flags;
 
 #define VDP_STATUS_VB   0x0008
-#define VDP_STATUS_ODD  0x0010
 
 void vdp_wait_vblank(void)
 {
@@ -91,6 +88,11 @@ static void vdp_init(void)
     VDP_CTRL = 0x9001;      /* 64x32 planes */
 }
 
+int pad_3button(void)
+{
+    return !pad6;
+}
+
 static void set_flag(uint16_t f, int on)
 {
     flags = on ? (flags | f) : (flags & (uint16_t)~f);
@@ -99,12 +101,12 @@ static void set_flag(uint16_t f, int on)
 
 /* ------------------------------------------------------------ commands */
 
-static const char *const kind_file[4] = { "INFO.STI", "FILM.STV", "FULL.STV", "I480.STV" };
+static const char *const kind_file[3] = { "INFO.STI", "FILM.STV", "FULL.STV" };
 static int osd_movie = -1;
 
 static int build_path(char *out, int movie, int kind, int part)
 {
-    if (movie < 0 || movie >= movie_count || kind < 0 || kind > 3)
+    if (movie < 0 || movie >= movie_count || kind < 0 || kind > 2)
         return -1;
     const char *a = "/MOVIES/";
     char *p = out;
@@ -147,14 +149,6 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
             return 0xFF;
         return (unsigned)ed_read_to_cart(off, dst, len);
     }
-    case CMD_VIDEO:
-        /* H40, interlace mode 1 (or with bit 1: mode 2, double resolution),
-         * or none. Bits 2-3: 480i experiments run at every vblank (main) */
-        vdp_reg12 = (p1 & 1) ? ((p1 & 2) ? 0x8C87 : 0x8C83) : 0x8C81;
-        VDP_CTRL = vdp_reg12;
-        il_trick = (p1 >> 2) & 3;
-        set_flag(FL_INTERLACE, p1 & 1);
-        return 0;
     case CMD_OSD:
         osd_draw(p1, p2, p3, osd_movie);
         return 0;
@@ -169,6 +163,9 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
         return 0;
     case CMD_CLEAR:
         osd_clear();
+        return 0;
+    case CMD_HELP:
+        osd_help(p1 & 1);
         return 0;
     case CMD_EDRV:
         return (unsigned)ed_rv_test(p1);
@@ -262,9 +259,6 @@ void md_main(int boot_err)
             latched |= pad & ~last_pad;
             last_pad = pad;
             COMM16(C_PAD) = pad | latched;
-            set_flag(FL_ODD, (st & VDP_STATUS_ODD) != 0);
-            if (il_trick == 1) VDP_CTRL = vdp_reg12;
-            if (il_trick == 2) { VDP_CTRL = 0x8104; VDP_CTRL = 0x8144; }
             set_flag(FL_PAD3, !pad6);
             COMM16(C_VBL) = ++vblanks;
             /* test telemetry (tests/harness.c reads work RAM 0xFFFF00) */

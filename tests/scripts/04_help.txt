@@ -1,0 +1,31 @@
+# The controls pop-up: MODE in the library and while watching, B in the
+# library (3-button pads); any button closes it.
+# pad6
+run 150
+shot library
+press mode 6
+run 20
+shot text_help_library
+press start 6
+run 20
+shot library_after
+press b 6
+run 20
+shot text_help_b
+press a 6
+run 20
+press a 6
+run 90
+shot play
+press mode 6
+run 30
+shot help_playing
+run 60
+shot help_still
+press c 6
+run 30
+shot playing_again
+press b 6
+run 60
+shot back_library
+telem
