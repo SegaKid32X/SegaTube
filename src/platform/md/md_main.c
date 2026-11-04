@@ -160,6 +160,8 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
     case CMD_CLEAR:
         osd_clear();
         return 0;
+    case CMD_EDDIAG:
+        return (unsigned)ed_diag(p1);
     case CMD_PUTS: {
         char t[3] = { (char)(p2 >> 8), (char)p2, 0 };
         if (!t[0]) t[0] = ' ';

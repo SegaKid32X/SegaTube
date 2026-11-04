@@ -230,7 +230,54 @@ static void sound_test(int *row)
     audio_pause(1);
 }
 
-/* 480i: the even field's buffer draws even lines, the odd one odd lines */
+/* 480i calibration. The Mega Drive text ruler (columns every 32 pixels) is
+ * the same in both fields; each 32X buffer draws bars on that grid (even
+ * field: reds, odd field: blues), a fine diagonal and a block of colour.
+ * LEFT/RIGHT shift the odd field's picture, UP/DOWN the even one's (through
+ * the line table, 2 pixels a step) until both line up with the ruler. */
+static int shift_px[2];
+
+static void interlace_tables(int b)
+{
+    static uint16_t rows[256];
+    for (int l = 0; l < 256; l++) rows[l] = (uint16_t)(l < 224 ? l : 223);
+    volatile uint16_t *fb = MARS_FRAMEBUF;
+    for (int l = 0; l < 256; l++)
+        fb[l] = (uint16_t)(0x100 + rows[l] * 160 + shift_px[b] / 2);
+}
+
+static void interlace_draw(int b)
+{
+    for (int r = 0; r < 224; r++) {
+        uint8_t *row = hw_row(r);
+        int line = 2 * r + b;                       /* of 448 */
+        memset(row, 0, 320);
+        if (r >= 12 && r < 60)                      /* ruler bars */
+            for (int x = 0; x < 320; x++) row[x] = (uint8_t)(b ? ((x >> 5) & 1 ? 3 : 5) : ((x >> 5) & 1 ? 2 : 4));
+        if (r >= 70 && r < 200) {
+            memset(row + 16, b ? 3 : 2, 96);        /* the colour block */
+            int x = 128 + line * 160 / 448;         /* a fine diagonal */
+            for (int k = 0; k < 3; k++) row[x + k] = 1;
+        }
+        row[0] = row[1] = row[159] = row[160] = row[318] = row[319] = 1;
+    }
+    interlace_tables(b);
+}
+
+static void show_shift(void)
+{
+    char t[40], *p = str(t, "BLUE ");
+    int v = shift_px[1];
+    *p++ = v < 0 ? '-' : '+';
+    p = num(p, (uint32_t)(v < 0 ? -v : v));
+    p = str(p, "  RED ");
+    v = shift_px[0];
+    *p++ = v < 0 ? '-' : '+';
+    p = num(p, (uint32_t)(v < 0 ? -v : v));
+    str(p, " PX      ");
+    puts_at(23, 1, t, 1);
+}
+
 static void interlace_test(void)
 {
     static uint16_t pal[256];
@@ -238,49 +285,71 @@ static void interlace_test(void)
     pal[1] = 0x7FFF;            /* white */
     pal[2] = 0x001F;            /* red */
     pal[3] = 0x7C00;            /* blue */
+    pal[4] = 0x000C;            /* dark red */
+    pal[5] = 0x3000;            /* dark blue */
     hw_video_mode(1, 0, 224);
-    for (int b = 0; b < 2; b++) {
-        for (int r = 0; r < 224; r++) {
-            uint8_t *row = hw_row(r);
-            int line = 2 * r + b;                       /* of 448 */
-            memset(row, 0, 320);
-            memset(row + 16, b ? 3 : 2, 96);            /* left: red / blue stripes */
-            int x = 128 + line * 160 / 448;             /* a fine diagonal */
-            for (int k = 0; k < 3; k++) row[x + k] = 1;
-            if ((line / 8) & 1) memset(row + 300, 1, 4);    /* 8-line ticks on the right */
-        }
+    for (int k = 0; k < 2; k++) {
+        interlace_draw(hw_back_buffer());
         hw_flip();
     }
     hw_load_palette(pal);
     md_cmd(CMD_CLEAR, 0, 0, 0);
+    for (int c = 0; c < 10; c++) {                   /* the ruler: 0 32 64 ... */
+        char t[6];
+        num(t, (uint32_t)c * 32);
+        puts_at(0, c * 4, t, 0);
+        puts_at(1, c * 4, "!", 0);
+    }
     md_cmd(CMD_VIDEO, 1, 0, 0);
-    puts_at(24, 1, "480I: STEADY PURPLE STRIPES AT LEFT AND", 0);
-    puts_at(25, 1, "A SMOOTH LINE = WORKS. FLICKER = NOT.", 0);
-    puts_at(26, 1, "B: SWAP FIELDS  START: DONE", 1);
-    int swap = 0, toggles = 0, last = -1, est = 0;
+    puts_at(24, 1, "LINE UP BOTH FIELDS' BARS WITH THE", 0);
+    puts_at(25, 1, "RULER: <> BLUE, UP/DN RED, B SWAP", 0);
+    puts_at(26, 1, "START: DONE (PHOTO THIS FIRST)", 1);
+    show_shift();
+    int swap = 0, last = -1, changes = 0, samples = 0, par = 0;
+    int dirty[2] = { 0, 0 };
     for (;;) {
         while (hw_in_vblank()) ;
         uint32_t spins = 0;
+        int sampled = 0;
         while (!hw_in_vblank()) {
-            if (++spins == 200) {
-                int odd = hw_flags() & FL_ODD;
-                toggles = (last >= 0 && odd != last) ? toggles + 1 : 0;
+            if (!sampled && ++spins == 200) {
+                int odd = (hw_flags() & FL_ODD) != 0;
+                if (last >= 0 && odd != last) changes++;
                 last = odd;
-                if (toggles >= 4) est = odd;
+                samples++;
+                sampled = 1;
             }
         }
-        int u = est;
-        est = !est;
-        hw_request_show(u ^ swap);
+        par ^= 1;
+        int next = par ^ swap;
+        /* the buffer not on screen can take a new line table now */
+        int hidden = hw_back_buffer();
+        if (dirty[hidden]) { interlace_tables(hidden); dirty[hidden] = 0; }
+        hw_request_show(next);
         pad_poll();
-        if (pad_pressed & PAD_B) swap ^= 1;
-        if (pad_pressed & PAD_START) break;
+        uint16_t p = pad_pressed;
+        if (p & PAD_B) swap ^= 1;
+        if (p & (PAD_LEFT | PAD_RIGHT)) {
+            shift_px[1] += (p & PAD_RIGHT) ? 2 : -2;
+            dirty[1] = 1;
+            show_shift();
+        }
+        if (p & (PAD_UP | PAD_DOWN)) {
+            shift_px[0] += (p & PAD_DOWN) ? 2 : -2;
+            dirty[0] = 1;
+            show_shift();
+        }
+        if (p & PAD_START) break;
     }
     md_cmd(CMD_VIDEO, 0, 0, 0);
-    char t[40], *p = str(t, "ODD FLAG: ");
-    str(p, toggles >= 4 ? "ALTERNATES" : "STEADY");
     md_cmd(CMD_CLEAR, 0, 0, 0);
-    puts_at(12, 8, t, 1);
+    char t[48], *q = str(t, "ODD FLAG CHANGED ");
+    q = num(q, (uint32_t)changes);
+    q = str(q, " OF ");
+    q = num(q, (uint32_t)samples);
+    str(q, " FIELDS");
+    puts_at(10, 4, t, 1);
+    show_shift();
 }
 
 void probe_run(void)
@@ -292,6 +361,9 @@ void probe_run(void)
         int row = 4;
         char t[40];
         vticks = 0;
+        puts_at(3, 1, "EVERDRIVE I/O REGISTERS:", 0);
+        md_cmd(CMD_EDDIAG, 4, 0, 0);
+        row = 9;
         int r = cmd_timed(CMD_SD_INIT, 0, 0, 0);
         if (r == 0xFE) line(row,  "EVERDRIVE", "NOT FOUND", 0);
         else if (r == 0xFF) line(row,  "EVERDRIVE", "SD CARD ERROR", 0);
@@ -317,6 +389,7 @@ void probe_run(void)
         wait_button();
         interlace_test();
         puts_at(14, 6, "START: RUN THE TESTS AGAIN", 0);
+        puts_at(16, 6, "(PHOTO THIS SCREEN TOO)", 0);
         wait_button();
     }
 }

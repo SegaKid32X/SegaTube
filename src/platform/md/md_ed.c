@@ -161,6 +161,56 @@ static int rx_name(char *out, int max)
     return 0;
 }
 
+/* Hardware test: what the EverDrive's I/O registers show, on text rows
+ * row..row+3. Returns 1 if a status command was answered. */
+int ed_diag(int row)
+{
+    char t[48], *p;
+    volatile uint16_t *io = (volatile uint16_t *)0xA130D0;
+    /* the eight registers, as words, four to a line */
+    for (int half = 0; half < 2; half++) {
+        p = t;
+        for (int i = 0; i < 4; i++) {
+            hex_string(p, io[half * 4 + i], 4);
+            p += 4;
+            *p++ = ' ';
+        }
+        *p = 0;
+        osd_text(1, row + half, half ? "A130D8:" : "A130D0:", 0);
+        osd_text(9, row + half, t, 0);
+    }
+    row++;
+    /* the 1 ms timer: does it count? */
+    uint16_t t0 = ED_TIMER;
+    for (int i = 0; i < 6; i++) vdp_wait_vblank();
+    uint16_t t1 = ED_TIMER;
+    p = t;
+    hex_string(p, t0, 4); p += 4; *p++ = ' ';
+    hex_string(p, t1, 4); p += 4; *p = 0;
+    osd_text(1, row + 1, "TIMER (100MS):", 0);
+    osd_text(16, row + 1, t, (uint16_t)(t1 - t0) > 50 && (uint16_t)(t1 - t0) < 200);
+    /* the status command, waiting longer */
+    ed_init_halt();
+    fifo_flush();
+    spin_limit = 300000;
+    uint8_t b[4] = { 0, 0, 0, 0 };
+    cmd_tx(CMD_STATUS);
+    int e1 = fifo_rd(b, 2);
+    cmd_tx(0x40);                       /* status2: key, protocol, device id, status */
+    uint8_t c[4] = { 0, 0, 0, 0 };
+    int e2 = fifo_rd(c, 4);
+    spin_limit = 600000;
+    p = t;
+    p = e1 ? (hex_string(p, 0xDEAD, 4), p + 4) : (hex_string(p, (uint32_t)b[0] << 8 | b[1], 4), p + 4);
+    *p++ = ' ';
+    if (e2) { hex_string(p, 0xDEAD, 4); p += 4; }
+    else { for (int i = 0; i < 4; i++) { hex_string(p, c[i], 2); p += 2; } }
+    *p = 0;
+    osd_text(1, row + 2, "STATUS:", 0);
+    osd_text(16, row + 2, t, !e1 && b[0] == 0xA5);
+    return !e1 && b[0] == 0xA5;
+}
+
 /* The folders in /MOVIES, sorted. */
 int ed_list_movies(void)
 {
