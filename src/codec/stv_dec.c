@@ -114,21 +114,36 @@ const uint8_t stv_grad_pattern[16] = {
 };
 
 #define SPREAD(c) (((uint32_t)(c) & 0x1F) | (((uint32_t)(c) & 0x3E0) << 5) | (((uint32_t)(c) & 0x7C00) << 10))
-#define FIELDS 0x01F07C1Fu          /* the three 5-bit fields of SPREAD, 10 bits apart */
-#define HALF   0x00401004u          /* 4 in each field: rounding for >> 3 */
+#define FIELDS5 0x01F07C1Fu         /* three 5-bit fields, 10 bits apart */
+#define FIELDS6 0x03F0FC3Fu         /* three 6-bit fields */
+#define TWO     0x00200802u         /* 2 in each field: rounding for >> 2 */
 
-/* Direct colour: 4 corners blended at pixel centres; channels work side by
- * side in one 32-bit word, 10 bits apart (31 x 8 fits in 10 bits). */
+/* A 4x4 ordered dither, one value in each of the three fields: the blend
+ * is worked out to 1/16 of a 5-bit step and then dithered down, so smooth
+ * gradients look like about 9 bits a channel instead of 5. */
+#define D3(d) ((uint32_t)(d) | (uint32_t)(d) << 10 | (uint32_t)(d) << 20)
+static const uint32_t grad_dither[16] = {
+    D3(0),  D3(8),  D3(2),  D3(10),
+    D3(12), D3(4),  D3(14), D3(6),
+    D3(3),  D3(11), D3(1),  D3(9),
+    D3(15), D3(7),  D3(13), D3(5),
+};
+
+/* Direct colour: 4 corners blended at pixel centres ((2x+1)/8, (2y+1)/8).
+ * The channels work side by side in one 32-bit word, 10 bits apart:
+ * vertically 31 x 8 then >> 2 (62 at most), horizontally 62 x 8 + 15 (511
+ * at most), so no field ever spills into the next. */
 void stv_grad_dc(const uint16_t *k, uint16_t *out)
 {
     uint32_t tl = SPREAD(k[0]), tr = SPREAD(k[1]), bl = SPREAD(k[2]), br = SPREAD(k[3]);
+    const uint32_t *dz = grad_dither;
     for (int y = 0; y < 4; y++) {
         uint32_t w1 = (uint32_t)(2 * y + 1), w0 = 8 - w1;
-        uint32_t l = ((tl * w0 + bl * w1 + HALF) >> 3) & FIELDS;
-        uint32_t r = ((tr * w0 + br * w1 + HALF) >> 3) & FIELDS;
+        uint32_t l = ((tl * w0 + bl * w1 + TWO) >> 2) & FIELDS6;       /* x2 */
+        uint32_t r = ((tr * w0 + br * w1 + TWO) >> 2) & FIELDS6;
         for (int x = 0; x < 4; x++) {
             uint32_t v1 = (uint32_t)(2 * x + 1), v0 = 8 - v1;
-            uint32_t v = ((l * v0 + r * v1 + HALF) >> 3) & FIELDS;
+            uint32_t v = ((l * v0 + r * v1 + *dz++) >> 4) & FIELDS5;  /* x16, dithered */
             *out++ = (uint16_t)((v & 0x1F) | ((v >> 5) & 0x3E0) | ((v >> 10) & 0x7C00));
         }
     }

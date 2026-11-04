@@ -16,6 +16,8 @@ int  movie_count;
 volatile uint16_t vblanks;
 
 static uint16_t latched, last_pad, last_ack;
+static uint16_t vdp_reg12 = 0x8C81;
+static int il_trick;            /* 1: rewrite register 12, 2: pulse the display, each vblank */
 #ifdef PAD_TEST
 /* hardware test only: makes the 68000 program bigger (does size matter?) */
 const uint8_t pad_test[3800] = { 1, 2, 3 };
@@ -146,7 +148,11 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
         return (unsigned)ed_read_to_cart(off, dst, len);
     }
     case CMD_VIDEO:
-        VDP_CTRL = (p1 & 1) ? 0x8C83 : 0x8C81;      /* H40, interlace mode 1 or none */
+        /* H40, interlace mode 1 (or with bit 1: mode 2, double resolution),
+         * or none. Bits 2-3: 480i experiments run at every vblank (main) */
+        vdp_reg12 = (p1 & 1) ? ((p1 & 2) ? 0x8C87 : 0x8C83) : 0x8C81;
+        VDP_CTRL = vdp_reg12;
+        il_trick = (p1 >> 2) & 3;
         set_flag(FL_INTERLACE, p1 & 1);
         return 0;
     case CMD_OSD:
@@ -257,6 +263,8 @@ void md_main(int boot_err)
             last_pad = pad;
             COMM16(C_PAD) = pad | latched;
             set_flag(FL_ODD, (st & VDP_STATUS_ODD) != 0);
+            if (il_trick == 1) VDP_CTRL = vdp_reg12;
+            if (il_trick == 2) { VDP_CTRL = 0x8104; VDP_CTRL = 0x8144; }
             set_flag(FL_PAD3, !pad6);
             COMM16(C_VBL) = ++vblanks;
             /* test telemetry (tests/harness.c reads work RAM 0xFFFF00) */

@@ -277,7 +277,19 @@ static void apply_trick(int next)
     case 2: if (next == 1) { MARS_VDP_MODE = VDP_MODE_BLANK; MARS_VDP_MODE = VDP_MODE_PACKED; } break;
     case 3: if (next == 0) { MARS_VDP_MODE = VDP_MODE_BLANK; MARS_VDP_MODE = VDP_MODE_PACKED; } break;
     case 4: MARS_VDP_MODE = VDP_MODE_PACKED | 0x40; MARS_VDP_MODE = VDP_MODE_PACKED; break;
+    /* 5-7: the 68000 (CMD_VIDEO) - 5 interlace mode 2, 6 rewrite VDP register
+     * 12 each vblank, 7 pulse the display each vblank */
+    case 8: MARS_ADAPTER = 0; MARS_ADAPTER = 0x8000; break;    /* FM off and on */
     }
+}
+
+static void trick_video(void)
+{
+    uint16_t p1 = 1;
+    if (trick == 5) p1 |= 2;
+    if (trick == 6) p1 |= 1 << 2;
+    if (trick == 7) p1 |= 2 << 2;
+    md_cmd(CMD_VIDEO, p1, 0, 0);
 }
 
 static void show_shift(void)
@@ -359,7 +371,8 @@ static void interlace_test(void)
             show_shift();
         }
         if (p & (PAD_A | PAD_C)) {
-            trick = (trick + 1) % 5;
+            trick = (trick + 1) % 9;
+            trick_video();
             show_shift();
         }
         if (p & PAD_START) break;
