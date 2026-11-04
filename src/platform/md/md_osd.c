@@ -297,8 +297,8 @@ static char *tenths(char *o, unsigned v)
 
 /* The stats (Y while watching), rows 2-3 on a panel.
  * P1 bit 15: away. P1 bit 14 clear: line 1 - P1 decode ms x10 (average),
- * P2 its maximum, P3 a frame's time; set: line 2 - P1 & 0x3FFF SD KB/s,
- * P2 buffer KB | lowest sound queue (2 ms units) << 8, P3 sound gaps << 8 | skipped. */
+ * P2 its maximum, P3 a frame's time | frames shown late << 10 (a second); set: line 2 - P1 & 0x3FFF SD KB/s,
+ * P2 buffer KB | lowest sound queue (2 ms units) << 8, P3 sound gaps << 8 | pictures skipped (a second). */
 void osd_stats(uint16_t p1, uint16_t p2, uint16_t p3)
 {
     if (p1 & 0x8000) {
@@ -311,7 +311,8 @@ void osd_stats(uint16_t p1, uint16_t p2, uint16_t p3)
         row = 2;
         o = str(o, "DECODE "); o = tenths(o, p1);
         o = str(o, " MAX "); o = tenths(o, p2);
-        o = str(o, " FRAME "); o = tenths(o, p3); o = str(o, " MS");
+        o = str(o, " FRAME "); o = tenths(o, p3 & 1023);
+        o = str(o, " LATE "); o = num(o, p3 >> 10);
     } else {
         row = 3;
         o = str(o, "SD "); o = num(o, p1 & 0x3FFF);

@@ -11,6 +11,7 @@ uint32_t audio_position(void);          /* samples played since the reset */
 uint32_t audio_space(void);             /* samples that can be written now */
 uint32_t audio_queued(void);
 uint32_t audio_underruns(void);
+int      audio_block_playing(void);     /* a block of the ring is playing (not silence) */
 int      audio_cycle(void);
 void     audio_write(const int16_t *pcm, int n);
 void     audio_write_silence(int n);

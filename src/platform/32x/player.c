@@ -60,11 +60,15 @@ void pad_flush(void)
     pad_pressed = 0;
 }
 
+static uint32_t now_sample(void);
+
 /* A command for the 68000 while streaming: let the read in flight finish. */
 void ui_cmd(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
 {
-    while (!stream_idle())
+    while (!stream_idle()) {
         stream_poll();
+        (void)now_sample();
+    }
     md_cmd(cmd, p1, p2, p3);
 }
 
@@ -88,9 +92,52 @@ static uint32_t ms_of_frame(uint32_t f)
 static uint32_t audio_base;         /* movie sample at audio_position() 0 */
 static uint32_t audio_next;         /* movie sample the ring's next sample is */
 
+/* The SH-2's free-running timer: 128 clocks a tick (5.56 us) */
+#define FRT_TCR     (*(volatile uint8_t *)0xFFFFFE16)
+#define FRT_FTCSR   (*(volatile uint8_t *)0xFFFFFE11)
+#define FRT_FRCH    (*(volatile uint8_t *)0xFFFFFE12)
+#define FRT_FRCL    (*(volatile uint8_t *)0xFFFFFE13)
+static uint16_t frt(void)
+{
+    uint8_t h = FRT_FRCH;
+    return (uint16_t)(h << 8 | FRT_FRCL);
+}
+
+/* The clock: the sound played so far. The ring only tells which 256-sample
+ * block is playing (11.6 ms steps), so the timer measures the time since
+ * that block was seen to start; this is called often (also from inside the
+ * decoder), so "seen" is close to "started". It also notes the 32X's
+ * vblanks, in samples, so a frame goes up at the vblank nearest its time. */
+static uint32_t ck_pos = 0xFFFFFFFFu, ck_k;
+static uint16_t ck_t;
+static int vb_was;
+static uint32_t vb_sample;              /* the clock at the last vblank's start */
+
 static uint32_t now_sample(void)
 {
-    return audio_base + audio_position();
+    uint32_t pos = audio_position();
+    uint16_t t = frt();
+    if (pos != ck_pos) {
+        ck_pos = pos;
+        ck_t = t;
+    }
+    uint32_t add = 0;
+    if (audio_block_playing()) {
+        add = (uint32_t)(uint16_t)(t - ck_t) * ck_k >> 16;
+        if (add > 255) add = 255;
+    }
+    uint32_t now = audio_base + pos + add;
+    int vb = hw_in_vblank();
+    if (vb && !vb_was) vb_sample = now;
+    vb_was = vb;
+    return now;
+}
+
+/* the decoder's hook: keep the SD card reading and the clock ticking */
+static void decode_poll(void)
+{
+    stream_poll();
+    (void)now_sample();
 }
 
 /* ------------------------------------------------------------ records */
@@ -263,17 +310,8 @@ static uint16_t palette[256];
 static int decode_errors;
 
 /* ---- stats (Y while watching): where the time goes ---- */
-#define FRT_TCR     (*(volatile uint8_t *)0xFFFFFE16)
-#define FRT_FTCSR   (*(volatile uint8_t *)0xFFFFFE11)
-#define FRT_FRCH    (*(volatile uint8_t *)0xFFFFFE12)
-#define FRT_FRCL    (*(volatile uint8_t *)0xFFFFFE13)
-static uint16_t frt(void)              /* 5.56 us ticks (clock / 128) */
-{
-    uint8_t h = FRT_FRCH;
-    return (uint16_t)(h << 8 | FRT_FRCL);
-}
 static int stats_on;
-static uint32_t st_dec_sum, st_dec_n, st_dec_max, st_skipped, st_vbl, st_fetched0;
+static uint32_t st_dec_sum, st_dec_n, st_dec_max, st_skipped, st_late, st_vbl, st_fetched0;
 static uint32_t st_q_min = 0xFFFFFFFFu;
 
 static void decode_picture_(const uint8_t *pic);
@@ -317,11 +355,11 @@ static void decode_picture_(const uint8_t *pic)
         hw_slave_start(slave_decode, 0);
     }
     uint32_t o0 = rd32(q);
-    t.poll = stream_poll;               /* keep the SD card busy meanwhile */
+    t.poll = decode_poll;               /* keep the SD card busy meanwhile */
     if (stv_decode_part(pic + o0, psize - o0, &t)) decode_errors++;
     if (parts == 2) {
         while (hw_slave_busy())
-            stream_poll();
+            decode_poll();
         hw_slave_wait();
         if (JOB->result) decode_errors++;
     }
@@ -695,14 +733,16 @@ static void stats_tick(void)
         uint32_t avg10 = avg * 1280 / 23011, max10 = st_dec_max * 1280 / 23011;
         uint32_t qms = st_q_min == 0xFFFFFFFFu ? 0 : st_q_min * 1000 / (mv.rate ? mv.rate : 1);
         uint32_t frame10 = mv.fps_num ? 10000u * mv.fps_den / mv.fps_num : 0;
-        ui_cmd(CMD_STATS, (uint16_t)(avg10 > 0x7FFF ? 0x7FFF : avg10),
-               (uint16_t)(max10 > 0xFFFF ? 0xFFFF : max10), (uint16_t)frame10);
+        ui_cmd(CMD_STATS, (uint16_t)(avg10 > 0x3FFF ? 0x3FFF : avg10),
+               (uint16_t)(max10 > 0xFFFF ? 0xFFFF : max10),
+               (uint16_t)((frame10 > 1023 ? 1023 : frame10) | (st_late > 63 ? 63 : st_late) << 10));
         ui_cmd(CMD_STATS, (uint16_t)(0x4000 | (kbs > 0x3FFF ? 0x3FFF : kbs)),
                (uint16_t)(stream_avail() / 1024 | (qms / 2 > 255 ? 255 : qms / 2) << 8),
                (uint16_t)((audio_underruns() > 255 ? 255 : audio_underruns()) << 8 |
                           (st_skipped > 255 ? 255 : st_skipped)));
     }
     st_dec_sum = st_dec_n = st_dec_max = 0;
+    st_skipped = st_late = 0;
     st_q_min = 0xFFFFFFFFu;
 }
 
@@ -712,7 +752,7 @@ static int play_from(int c)
     int have_next = 0, first = 1, skipping = 0;
     uint32_t next_frame = 0;
     const uint16_t *next_pal = 0;
-    uint32_t half_vbl = mv.rate / 120;
+    const uint32_t spv = mv.rate * 1001 / 60000;  /* samples a vblank */
     for (;;) {
         service();
         int seek_to = -1;
@@ -759,7 +799,13 @@ static int play_from(int c)
         }
         if (have_next && !paused) {
             uint32_t now = now_sample();
-            if (first || now + half_vbl >= sample_of(next_frame)) {
+            /* the next vblank, in samples */
+            if (vb_sample > now) vb_sample = now;      /* (after a seek) */
+            uint32_t next_vbl = vb_sample + spv;
+            while (next_vbl <= now) next_vbl += spv;
+            uint32_t due = sample_of(next_frame);
+            if (first || due <= next_vbl + spv / 2) {
+                if (!first && now > due + spv) st_late++;
                 show_back();
                 if (next_pal) hw_load_palette(next_pal);
                 shown_frame = next_frame;
@@ -786,6 +832,7 @@ int play_movie(int m, int kind)
      * to clear on compare match A at 2; the output level stays the same) */
     FRT_TCR = 0x02;
     FRT_FTCSR = 0x00;
+    st_late = 0;
     st_skipped = 0;
     have_info = info_read(m, &inf) == 0;
     if (kind != KIND_FILM && kind != KIND_FULL) kind = KIND_FILM;
@@ -811,6 +858,7 @@ int play_movie(int m, int kind)
             return PLAY_ERROR;
         }
         if (mv.rate) audio_init((int)mv.rate);
+        ck_k = audio_cycle() ? (128u << 16) / (uint32_t)audio_cycle() : 0;  /* samples a tick, x 65536 */
         TRACE(0x7003);
 #ifdef DEBUG_STEPS
         ui_cmd(CMD_MESSAGE, MSG_ERROR, 0x102, 0);
