@@ -13,6 +13,7 @@ SECTIONS
     __data_load = LOADADDR(.text) + SIZEOF(.text);
     .data 0xFF0000 : AT(__data_load) {
         __data_start = .;
+        *(.ramtext)                 /* the EverDrive driver: runs with RV = 1 (md_ed.c) */
         *(.data) *(.data.*)
         . = ALIGN(4);
         __data_end = .;

@@ -71,6 +71,7 @@ $(OBJ)/md/%.o: src/platform/md/%.c src/platform/md/md.h $(OBJ)/osd_tiles.h | $(O
 	$(MDCC) $(MDCFLAGS) -c $< -o $@
 $(OBJ)/md.bin: $(MD_OBJS) src/platform/md/md.ld
 	$(MDCC) -m68000 -nostdlib -T src/platform/md/md.ld $(MD_OBJS) -lgcc -o $(OBJ)/md.elf -Wl,-Map=$(OBJ)/md.map
+	python3 tools/check_ramtext.py $(MDPREFIX)objdump $(OBJ)/md.elf
 	$(MDOBJC) -O binary $(OBJ)/md.elf $@
 	@echo "68000 program: $$(stat -c %s $@) bytes"
 
@@ -90,7 +91,7 @@ $(OBJ)/$(TARGET).raw: $(OBJ)/$(TARGET).elf
 
 $(ROM): $(OBJ)/$(TARGET).raw | rom
 	cp $< $@
-	python3 tools/romfix.py $@ --pow2 --gran 524288
+	python3 tools/romfix.py $@ --pow2 --gran 4194304    # 4 MiB: the EverDrive's transfers land at 0x300000-0x3FFFFF
 	python3 tests/verify_rom.py $@ $(OBJ)/$(TARGET).elf --title SEGATUBE --marker "SEGATUBE PLAYER" --min-text 2048
 
 # ---- the test ROM: a generated clip, every mode, built in ----

@@ -3,21 +3,33 @@
  * The protocol is the EverDrive's documented I/O API (krikzz/mega-ed-pub,
  * edio/everdrive.c, MIT licence): commands go byte by byte through a FIFO at
  * 0xA130D1 as '+', ~'+', cmd, ~cmd and their arguments, most significant
- * byte first; answers come back through the same FIFO. Every wait here has a
- * time limit, so a console without an EverDrive (or an emulator) just gets
- * "no EverDrive" instead of hanging.
+ * byte first; answers come back through the same FIFO.
+ *
+ * With the 32X attached the EverDrive's I/O is only there with RV = 1 (the
+ * 32X hands the cartridge bus to the 68000): with RV = 0 it reads as open bus
+ * and writes are lost (console tests, 2026-11-04; ZERO SECTOR's EverDrive
+ * save code sets RV = 1 the same way). With RV = 1 the 68000 cannot run code
+ * from the cartridge, so this whole driver lives in work RAM (section
+ * .ramtext, copied there with .data at start-up) and turns RV on only for
+ * each operation. It must not call anything outside work RAM meanwhile (no
+ * library calls: tools/check_ramtext.py checks the build). The SH-2s keep off
+ * the cartridge while a command runs (they wait for the answer in SDRAM).
  *
  * File data goes straight into cartridge memory (command 0xCB): the
- * EverDrive's processor does the transfer while the 68000 waits in work RAM
- * (md_halt.s). The SH-2s then read it from the cartridge.
+ * EverDrive's processor does the transfer while we wait here. The SH-2s then
+ * read it from the cartridge.
+ *
+ * Every wait has a time limit, so a console without an EverDrive (or an
+ * emulator) gets "no EverDrive" instead of hanging.
  */
 #include "md.h"
 
+#define RAM __attribute__((section(".ramtext"), noinline))
+
 #define ED_FIFO     (*(volatile uint8_t *)0xA130D1)
 #define ED_FSTAT    (*(volatile uint16_t *)0xA130D2)
-#define ED_TIMER    (*(volatile uint16_t *)0xA130D6)
+#define ED_SYSSTAT  (*(volatile uint16_t *)0xA130D4)
 
-#define FIFO_CPU_RXF 0x8000     /* nothing for the CPU to read */
 #define FIFO_RXF_MSK 0x07FF
 
 #define CMD_STATUS   0x10
@@ -31,6 +43,7 @@
 #define CMD_F_FPTR   0xCF
 
 #define STATUS_CMD_OK 0x02
+#define STATUS_STROBE 0x08
 #define FA_READ      0x01
 #define DIR_OPT_SORTED 0x01
 #define AT_DIR       0x10
@@ -40,24 +53,37 @@
 
 static int ed_ok;
 static long spin_limit = 600000;    /* FIFO waits (about 1.5 s) */
+/* (strings in work RAM too: string constants would be in the cartridge) */
+static char path_root[] = "/";
+static char path_movies[] = "/MOVIES";
+
+/* ---- RV ---- */
+
+static void RAM rv_on(void)
+{
+    __asm__ volatile ("bset #0,0xA15107" ::: "memory", "cc");
+}
+
+static void RAM rv_off(void)
+{
+    __asm__ volatile ("bclr #0,0xA15107" ::: "memory", "cc");
+}
 
 /* ---- the FIFO ---- */
 
-static void fifo_wr(const void *data, int len)
+static void RAM fifo_wr8(unsigned v) { ED_FIFO = (uint8_t)v; }
+static void RAM fifo_wr16(unsigned v) { ED_FIFO = (uint8_t)(v >> 8); ED_FIFO = (uint8_t)v; }
+static void RAM fifo_wr32(uint32_t v)
 {
-    const uint8_t *p = data;
-    while (len--)
-        ED_FIFO = *p++;
+    ED_FIFO = (uint8_t)(v >> 24);
+    ED_FIFO = (uint8_t)(v >> 16);
+    ED_FIFO = (uint8_t)(v >> 8);
+    ED_FIFO = (uint8_t)v;
 }
 
-static void fifo_wr8(unsigned v) { ED_FIFO = (uint8_t)v; }
-static void fifo_wr16(unsigned v) { fifo_wr8(v >> 8); fifo_wr8(v); }
-static void fifo_wr32(uint32_t v) { fifo_wr16(v >> 16); fifo_wr16(v & 0xFFFF); }
-
 /* Read len bytes; 0, or -1 if the EverDrive stopped answering. */
-static int fifo_rd(void *data, int len)
+static int RAM fifo_rd(uint8_t *p, int len)
 {
-    uint8_t *p = data;
     long spins = 0;
     while (len) {
         int n = ED_FSTAT & FIFO_RXF_MSK;
@@ -75,15 +101,13 @@ static int fifo_rd(void *data, int len)
     return 0;
 }
 
-static void fifo_flush(void)
+static void RAM fifo_flush(void)
 {
-    ED_FIFO = 0;
-    ED_FIFO = 0;
     for (int i = 0; i < 4096 && (ED_FSTAT & FIFO_RXF_MSK); i++)
         (void)ED_FIFO;
 }
 
-static void cmd_tx(unsigned cmd)
+static void RAM cmd_tx(unsigned cmd)
 {
     fifo_wr8('+');
     fifo_wr8('+' ^ 0xFF);
@@ -91,15 +115,17 @@ static void cmd_tx(unsigned cmd)
     fifo_wr8(cmd ^ 0xFF);
 }
 
-static void tx_string(const char *s)
+static void RAM tx_string(const char *s)
 {
     int n = 0;
     while (s[n]) n++;
     fifo_wr16((unsigned)n);
-    fifo_wr(s, n);
+    for (int i = 0; i < n; i++)
+        fifo_wr8((uint8_t)s[i]);
 }
 
-static int check_status(void)
+/* The status command: 0 if the last command went well, else its error. */
+static int RAM check_status(void)
 {
     uint8_t b[2];
     cmd_tx(CMD_STATUS);
@@ -110,44 +136,60 @@ static int check_status(void)
     return b[1];
 }
 
-/* ---- the RAM-resident wait ---- */
-
-extern const uint16_t ed_halt_code[], ed_halt_code_end[];
-static uint16_t halt_ram[48];
-typedef int (*halt_fn)(int stat_req);
-
-void ed_init_halt(void)
+/* Wait while the EverDrive's processor owns the cartridge bus (a file read
+ * into cartridge memory). From ed_halt_app in the EverDrive's sample code:
+ * post the status to wait for, start, then poll SYSSTAT until it reads
+ * 0x55A0 with the strobe toggling and that status bit clear. */
+static int RAM run_dma(void)
 {
-    int n = (int)(ed_halt_code_end - ed_halt_code);
-    for (int i = 0; i < n && i < (int)(sizeof halt_ram / 2); i++)
-        halt_ram[i] = ed_halt_code[i];
+    ED_SYSSTAT = STATUS_CMD_OK;
+    ED_FIFO = 0;                            /* run */
+    for (long t = 0; t < 4000000; t++) {
+        uint16_t s = ED_SYSSTAT;
+        if ((s & 0xFFF8) != (0x55A0 | STATUS_STROBE)) continue;
+        s = ED_SYSSTAT;
+        if ((s & 0xFFF8) != 0x55A0) continue;
+        if (s & STATUS_CMD_OK) continue;
+        return 0;
+    }
+    return -1;
 }
 
-/* ---- commands ---- */
+/* ---- the commands (each one RV = 1 only while it runs) ---- */
 
-int ed_detect(void)
+static int RAM detect_rv(void)
 {
-    ed_init_halt();
-    /* an EverDrive answers the status command with 0xA5, 0x00 */
     fifo_flush();
-    spin_limit = 100000;            /* no EverDrive: give up quickly */
-    ed_ok = check_status() == 0;
+    spin_limit = 100000;                    /* no EverDrive: give up quickly */
+    uint8_t b[2];
+    cmd_tx(CMD_STATUS);
+    int r = fifo_rd(b, 2);
     spin_limit = 600000;
-    if (!ed_ok)
+    /* (the second byte is the previous command's result, which can be an
+     * error left over from the EverDrive's menu: only the key matters) */
+    if (r || b[0] != 0xA5)
         return 0;
     /* the SD card: initialise it if the root does not list */
     cmd_tx(CMD_F_DIR_LD);
     fifo_wr8(0);
-    tx_string("/");
+    tx_string(path_root);
     if (check_status()) {
         cmd_tx(CMD_DISK_INIT);
         if (check_status())
-            return ed_ok = 0, 0;
+            return 0;
     }
     return 1;
 }
 
-static int rx_name(char *out, int max)
+int RAM ed_detect(void)
+{
+    rv_on();
+    ed_ok = detect_rv();
+    rv_off();
+    return ed_ok;
+}
+
+static int RAM rx_name(char *out, int max)
 {
     uint8_t b[2];
     if (fifo_rd(b, 2)) return -1;
@@ -161,179 +203,101 @@ static int rx_name(char *out, int max)
     return 0;
 }
 
-/* Hardware test: what the EverDrive's I/O registers show, on text rows
- * row..row+3. Returns 1 if a status command was answered. */
-int ed_diag(int row)
+static int RAM list_rv(void)
 {
-    char t[48], *p;
-    volatile uint16_t *io = (volatile uint16_t *)0xA130D0;
-    /* the eight registers, as words, four to a line */
-    for (int half = 0; half < 2; half++) {
-        p = t;
-        for (int i = 0; i < 4; i++) {
-            hex_string(p, io[half * 4 + i], 4);
-            p += 4;
-            *p++ = ' ';
-        }
-        *p = 0;
-        osd_text(1, row + half, half ? "A130D8:" : "A130D0:", 0);
-        osd_text(9, row + half, t, 0);
+    cmd_tx(CMD_F_DIR_LD);
+    fifo_wr8(DIR_OPT_SORTED);
+    tx_string(path_movies);
+    if (check_status())
+        return 0;                       /* no MOVIES folder: no movies */
+    uint8_t b[2];
+    cmd_tx(CMD_F_DIR_SIZE);
+    if (fifo_rd(b, 2)) return -1;
+    int total = b[0] << 8 | b[1];
+    if (total > 1000) total = 1000;
+    cmd_tx(CMD_F_DIR_GET);
+    fifo_wr16(0);
+    fifo_wr16((unsigned)total);
+    fifo_wr16(NAME_LEN - 1);
+    movie_count = 0;
+    char *dst = movie_name[0];
+    for (int i = 0; i < total; i++) {
+        uint8_t resp, info[9];
+        char name[NAME_LEN];
+        if (fifo_rd(&resp, 1) || resp) return movie_count;
+        if (fifo_rd(info, 9) || rx_name(name, NAME_LEN)) return -1;
+        if (!(info[8] & AT_DIR) || name[0] == '.' || movie_count >= MAX_MOVIES)
+            continue;
+        for (int k = 0; k < NAME_LEN; k++) dst[k] = name[k];
+        dst += NAME_LEN;
+        movie_count++;
     }
-    row++;
-    /* the 1 ms timer: does it count? */
-    uint16_t t0 = ED_TIMER;
-    for (int i = 0; i < 6; i++) vdp_wait_vblank();
-    uint16_t t1 = ED_TIMER;
-    p = t;
-    hex_string(p, t0, 4); p += 4; *p++ = ' ';
-    hex_string(p, t1, 4); p += 4; *p = 0;
-    osd_text(1, row + 1, "TIMER (100MS):", 0);
-    osd_text(16, row + 1, t, (uint16_t)(t1 - t0) > 50 && (uint16_t)(t1 - t0) < 200);
-    /* the status command, waiting longer */
-    ed_init_halt();
-    fifo_flush();
-    spin_limit = 300000;
-    uint8_t b[4] = { 0, 0, 0, 0 };
-    cmd_tx(CMD_STATUS);
-    int e1 = fifo_rd(b, 2);
-    cmd_tx(0x40);                       /* status2: key, protocol, device id, status */
-    uint8_t c[4] = { 0, 0, 0, 0 };
-    int e2 = fifo_rd(c, 4);
-    spin_limit = 600000;
-    p = t;
-    p = e1 ? (hex_string(p, 0xDEAD, 4), p + 4) : (hex_string(p, (uint32_t)b[0] << 8 | b[1], 4), p + 4);
-    *p++ = ' ';
-    if (e2) { hex_string(p, 0xDEAD, 4); p += 4; }
-    else { for (int i = 0; i < 4; i++) { hex_string(p, c[i], 2); p += 2; } }
-    *p = 0;
-    osd_text(1, row + 2, "STATUS:", 0);
-    osd_text(16, row + 2, t, !e1 && b[0] == 0xA5);
-    return !e1 && b[0] == 0xA5;
+    return movie_count;
 }
 
-#ifndef NO_BLIND
-/* Hardware test: a transfer without reading anything back. Asks the
- * EverDrive to read /PROBE.BIN (a copy of this ROM the user put on the SD
- * card) at some offset into cartridge memory at 0x300000, then compares it
- * with the ROM itself. Shows the result on text rows row..row+2. */
-extern const uint16_t ed_blind_code[], ed_blind_code_end[];
-static uint16_t blind_ram[48];
-typedef void (*blind_fn)(int frames);
-
-#define CART_LO     ((const volatile uint8_t *)0x880000)    /* cartridge 0 .. 512 KiB */
-#define BANK_WIN    ((const volatile uint8_t *)0x900000)
-
-/* The transfer lands in the unused (zero) end of this 512 KiB ROM, which
- * the 68000 can read at 0x880000+: beyond the ROM, the EverDrive's 32X
- * mode shows nothing (the first try read 0 matching bytes there). */
-#define BLIND_DST   0x060000u
-
-static int compare_blind(uint32_t off, uint32_t len)
+/* The folders in /MOVIES, sorted. */
+int RAM ed_list_movies(void)
 {
-    int same = 0;
-    for (uint32_t i = 0; i < len; i++)
-        if (CART_LO[BLIND_DST + i] == CART_LO[off + i]) same++;
-    return same;
+    if (!ed_ok) return -1;
+    rv_on();
+    int r = list_rv();
+    rv_off();
+    return r;
 }
 
-static void show_bytes(int col, int row, uint32_t at)
+int RAM ed_open(const char *path)
 {
-    char t[12];
-    hex_string(t, (uint32_t)CART_LO[at] << 24 | (uint32_t)CART_LO[at + 1] << 16 |
-                  (uint32_t)CART_LO[at + 2] << 8 | CART_LO[at + 3], 8);
-    osd_text(col, row, t, 0);
-}
-
-int ed_blind_test(int row)
-{
-    char t[40], *p;
-    int n = (int)(ed_blind_code_end - ed_blind_code);
-    for (int i = 0; i < n && i < 48; i++) blind_ram[i] = ed_blind_code[i];
-    blind_fn wait_run = (blind_fn)(void *)blind_ram;
-    /* the MARS id the 32X shows at A130EC: do reads here work at all? */
-    volatile uint16_t *id = (volatile uint16_t *)0xA130EC;
-    p = t;
-    hex_string(p, id[0], 4); p += 4; *p++ = ' ';
-    hex_string(p, id[1], 4); p += 4; *p = 0;
-    osd_text(1, row, "A130EC (MARS):", 0);
-    osd_text(16, row, t, id[0] == 0x4D41);
-    /* a part of the ROM full of code (the 68000 program from 0x800), at a
-     * different offset each run, so neither zeros nor old data can pass */
-    uint32_t off = 0x800 + (uint32_t)(vblanks & 0x1F) * 0x100;
-    uint32_t len = 0x1000;
-    /* each step on screen first: if the console stops, the last one shown
-     * is where */
-    osd_text(1, row + 1, "BLIND READ:", 0);
-    osd_text(16, row + 1, "1 OPEN      ", 1);
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
+    if (!ed_ok) return ERR_STATUS;
+    rv_on();
+    cmd_tx(CMD_F_FCLOSE);
+    (void)check_status();
     cmd_tx(CMD_F_FOPN);
     fifo_wr8(FA_READ);
-    tx_string("/PROBE.BIN");
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
-    osd_text(16, row + 1, "2 SEEK      ", 1);
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
-    cmd_tx(CMD_F_FPTR);
-    fifo_wr32(off);
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
-    osd_text(16, row + 1, "3 READ      ", 1);
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
-    osd_text(1, row + 2, "BEFORE", 0);
-    show_bytes(8, row + 2, BLIND_DST);
-    cmd_tx(CMD_F_FRD_MEM);
-    fifo_wr32(BLIND_DST);
-    fifo_wr32(len);
-    wait_run(30);                       /* half a second for 4 KiB */
-    osd_text(18, row + 2, "AFTER", 0);
-    show_bytes(24, row + 2, BLIND_DST);
-    osd_text(16, row + 1, "4 COMPARE   ", 1);
-    for (int i = 0; i < 20; i++) vdp_wait_vblank();
-    int same = compare_blind(off, len);
-    p = t;
-    hex_string(p, (uint32_t)same, 4);
-    p += 4;
-    *p++ = '/';
-    hex_string(p, len, 4);
-    osd_text(1, row + 1, "BLIND READ:", 0);
-    osd_text(16, row + 1, same == (int)len ? "WORKS     " : same > (int)len / 2 ? "PARTLY    " : "NO DATA   ", same == (int)len);
-    osd_text(27, row + 1, t, 0);
-    if (same != (int)len) return 0;
-    /* how fast: 32 KiB with shorter and shorter waits */
-    int best = 0;
-    for (int frames = 8; frames >= 1; frames /= 2) {
-        off = off == 0x800 ? 0xA00 : 0x800;    /* (alternate: old data cannot pass) */
-        cmd_tx(CMD_F_FPTR);
-        fifo_wr32(off);
-        for (int i = 0; i < 2; i++) vdp_wait_vblank();
-        cmd_tx(CMD_F_FRD_MEM);
-        fifo_wr32(BLIND_DST);
-        fifo_wr32(0x8000);
-        wait_run(frames);
-        if (compare_blind(off, 0x8000) == 0x8000) best = frames;
-        else break;
-    }
-    p = t;
-    p = (char *)"32K IN ";
-    char u[24], *q = u;
-    while (*p) *q++ = *p++;
-    *q++ = (char)('0' + best);
-    const char *f = " FRAMES OR LESS";
-    while (*f) *q++ = *f++;
-    *q = 0;
-    osd_text(1, row + 3, "BLIND SPEED:", 0);
-    osd_text(16, row + 3, best ? u : "OVER 8 FRAMES", best > 0);
-    return 1;
+    tx_string(path);
+    int r = check_status();
+    rv_off();
+    return r;
 }
 
-#endif
+int RAM ed_close(void)
+{
+    if (!ed_ok) return ERR_STATUS;
+    rv_on();
+    cmd_tx(CMD_F_FCLOSE);
+    int r = check_status();
+    rv_off();
+    return r;
+}
 
-/* Hardware test: the I/O registers again, with RV = 1 (run from work RAM).
- * Shows them on text rows row..row+2; returns 1 if the status command was
- * answered with 0xA5. */
+/* Read len bytes at offset of the open file into cartridge memory. */
+int RAM ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len)
+{
+    if (!ed_ok) return ERR_STATUS;
+    COMM16(C_FLAGS) |= FL_BUSY;
+    rv_on();
+    cmd_tx(CMD_F_FPTR);
+    fifo_wr32(offset);
+    int e = check_status();
+    if (!e) {
+        cmd_tx(CMD_F_FRD_MEM);
+        fifo_wr32(cart_addr);
+        fifo_wr32(len);
+        e = run_dma() ? ERR_TIMEOUT : check_status();
+    }
+    rv_off();
+    COMM16(C_FLAGS) &= (uint16_t)~FL_BUSY;
+    return e;
+}
+
+/* ---- hardware test: the I/O registers with RV = 1 (md_halt.s) ---- */
+
 extern const uint16_t ed_rv_code[], ed_rv_code_end[];
 static uint16_t rv_ram[96];
 static uint16_t rv_out[16];
 typedef void (*rv_fn)(uint16_t *out);
 
+/* Shows them on text rows row..row+2; returns 1 if the status command was
+ * answered with 0xA5. */
 int ed_rv_test(int row)
 {
     int n = (int)(ed_rv_code_end - ed_rv_code);
@@ -355,84 +319,13 @@ int ed_rv_test(int row)
     p = t;
     hex_string(p, rv_out[8], 4); p += 4; *p++ = ' ';
     hex_string(p, rv_out[9], 4); p += 4; *p++ = ' ';
-    p = (char *)t + 10;
     *p++ = 'A'; *p++ = 'N'; *p++ = 'S'; *p++ = ' ';
     hex_string(p, rv_out[10], 1); p += 1; *p++ = ':';
     hex_string(p, rv_out[11] & 0xFF, 2); p += 2;
     hex_string(p, rv_out[12] & 0xFF, 2); p += 2;
     *p = 0;
     int ok = rv_out[10] >= 1 && (rv_out[11] & 0xFF) == 0xA5;
-    uint16_t dt = (uint16_t)(rv_out[9] - rv_out[8]);
     osd_text(1, row + 2, "RV=1 TIMER:", 0);
-    osd_text(13, row + 2, t, ok || (dt > 50 && dt < 200));
+    osd_text(13, row + 2, t, ok);
     return ok;
-}
-
-/* The folders in /MOVIES, sorted. */
-int ed_list_movies(void)
-{
-    if (!ed_ok) return -1;
-    cmd_tx(CMD_F_DIR_LD);
-    fifo_wr8(DIR_OPT_SORTED);
-    tx_string("/MOVIES");
-    if (check_status())
-        return 0;                       /* no MOVIES folder: no movies */
-    uint8_t b[2];
-    cmd_tx(CMD_F_DIR_SIZE);
-    if (fifo_rd(b, 2)) return -1;
-    int total = b[0] << 8 | b[1];
-    if (total > 1000) total = 1000;
-    cmd_tx(CMD_F_DIR_GET);
-    fifo_wr16(0);
-    fifo_wr16((unsigned)total);
-    fifo_wr16(NAME_LEN - 1);
-    movie_count = 0;
-    for (int i = 0; i < total; i++) {
-        uint8_t resp, info[9];
-        char name[NAME_LEN];
-        if (fifo_rd(&resp, 1) || resp) return movie_count;
-        if (fifo_rd(info, 9) || rx_name(name, NAME_LEN)) return -1;
-        if (!(info[8] & AT_DIR) || name[0] == '.' || movie_count >= MAX_MOVIES)
-            continue;
-        for (int k = 0; k < NAME_LEN; k++) movie_name[movie_count][k] = name[k];
-        movie_count++;
-    }
-    return movie_count;
-}
-
-int ed_open(const char *path)
-{
-    if (!ed_ok) return ERR_STATUS;
-    cmd_tx(CMD_F_FCLOSE);
-    (void)check_status();
-    cmd_tx(CMD_F_FOPN);
-    fifo_wr8(FA_READ);
-    tx_string(path);
-    return check_status();
-}
-
-int ed_close(void)
-{
-    if (!ed_ok) return ERR_STATUS;
-    cmd_tx(CMD_F_FCLOSE);
-    return check_status();
-}
-
-/* Read len bytes at offset of the open file into cartridge memory. */
-int ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len)
-{
-    if (!ed_ok) return ERR_STATUS;
-    cmd_tx(CMD_F_FPTR);
-    fifo_wr32(offset);
-    int e = check_status();
-    if (e) return e;
-    COMM16(C_FLAGS) |= FL_BUSY;
-    cmd_tx(CMD_F_FRD_MEM);
-    fifo_wr32(cart_addr);
-    fifo_wr32(len);
-    int t = ((halt_fn)(void *)halt_ram)(STATUS_CMD_OK);
-    COMM16(C_FLAGS) &= (uint16_t)~FL_BUSY;
-    if (t)
-        return ERR_TIMEOUT;
-    return check_status();
 }

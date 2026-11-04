@@ -127,9 +127,6 @@ int  ed_list_movies(void);                     /* fills movie_name; count or -1 
 int  ed_open(const char *path);                /* 0 or error */
 int  ed_close(void);
 int  ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len);   /* 0 or error */
-void ed_init_halt(void);
-int  ed_diag(int row);
-int  ed_blind_test(int row);
 int  ed_rv_test(int row);
 
 /* md_vfs.c: movies built into the ROM */
