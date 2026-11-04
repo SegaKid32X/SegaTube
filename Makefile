@@ -8,7 +8,7 @@
 #   make clean
 #
 # Toolchain: sh-elf and m68k-elf GCC in $(GENDEV) (Chilly Willy's 32XDK layout;
-# see docs/BUILDING.md for building one from Ubuntu's GCC sources).
+# see docs/DESIGN.md section 9 for building one from Ubuntu's GCC sources).
 # ======================================================================
 
 GENDEV ?= /opt/toolchains/sega

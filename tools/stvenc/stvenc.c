@@ -22,6 +22,10 @@
 #include <math.h>
 #include <errno.h>
 #include "stv_dec.h"
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
 
 #define MAX_W           320
 #define MAX_H           224
@@ -1020,6 +1024,9 @@ static void parse(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);    /* raw frames, not text */
+#endif
     parse(argc, argv);
     const int depth = opt.profile == STV_PROF_FILM ? STV_DEPTH_DC : STV_DEPTH_P8;
     const int fields = opt.profile == STV_PROF_I480 ? 2 : 1;

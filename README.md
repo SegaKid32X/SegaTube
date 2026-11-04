@@ -4,8 +4,9 @@ A movie player for the **Sega 32X** with a **Mega EverDrive PRO**: put converted
 movies on the SD card, pick one from a poster library, and watch it with VHS-style
 fast forward/rewind, pause and a scrubber with thumbnails.
 
-> Status: in development. The format, encoder, converter and player are written;
-> emulator and hardware testing are in progress. See "Testing" below.
+> Status: works in the PicoDrive emulator (library, all three modes, sound, pause,
+> fast forward/rewind, scrubber). Not yet tested on a real console: see
+> "Testing on your console" below.
 
 ## Picture modes
 
@@ -32,16 +33,36 @@ Press **C** while watching to switch modes (the movie keeps its place).
 ## Converting movies
 
 The 32X cannot decode MP4 itself (two 23 MHz CPUs), so movies are converted once
-on a PC or Mac:
+on a PC or Mac with **SegaTube Converter**: download it from the repository's
+Actions tab (the latest `converter` run, artifacts) or Releases, open it, add
+videos, choose the SD card and press Convert. Dropping videos onto the app works
+too. (macOS: the app is not signed; right-click it and choose Open the first time.)
+
+From a terminal, with Python 3, ffmpeg and `make tools`:
 
 ```bash
 python3 converter/segatube_convert.py "My Movie.mp4" --sd /Volumes/EVERDRIVE
 ```
 
-or run `segatube_convert.py` with no arguments for a window to drop files into.
 Each movie becomes `MOVIES/<title>/` with `INFO.STI` (title, poster, thumbnails)
-and `FILM.STV`, `FULL.STV`, `I480.STV`. Needs ffmpeg (or `pip install imageio-ffmpeg`)
-and the `stvenc` encoder (`make tools`).
+and `FILM.STV`, `FULL.STV`, `I480.STV`. All three modes take about 1 GB per hour
+of film each at the default quality; `--modes film,full` leaves one out. The modes
+are encoded at the same time; a 2-hour film takes roughly 45 minutes on a 4-core
+computer.
+
+## Testing on your console
+
+1. Copy `segatube-probe.32x` and `segatube.32x` to the SD card, and convert one
+   movie onto it (in `MOVIES/`).
+2. Run **segatube-probe.32x** (the hardware test). It shows: whether the EverDrive
+   answered, the SD read speed (KB/s), the speed with the copy into the 32X's
+   memory, whether a repeated read gives the same data, the time to decode one
+   picture, and plays a 2-second tone. Photograph that screen. Press A for the
+   480i test: steady fine purple stripes on the left and a smooth diagonal mean
+   480i works; flickering red/blue means it does not (B swaps the fields).
+3. Run **segatube.32x**: the library should list your movie.
+4. If the EverDrive part fails, `segatube-test.32x` has a short test movie built
+   in and plays without the SD card.
 
 ## Building
 
