@@ -146,6 +146,7 @@ int movie_open(movie_t *m, int movie, int kind)
     if (rd32(h) != STV_MAGIC) return 0xFC;
     m->movie = movie;
     m->kind = kind;
+    m->version = rd16(h + 4);
     m->depth = rd16(h + 8);
     m->interlaced = rd16(h + 10);
     m->pic_w = rd16(h + 12); m->pic_h = rd16(h + 14);

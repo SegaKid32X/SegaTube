@@ -100,6 +100,40 @@ static int move_ok(const streams *s, const stv_target *t, int x, int y, int dx, 
     return sx >= 0 && sx <= t->bw * 4 - 4 && sy >= s->row0 * 4 && sy <= s->row1 * 4 - 4;
 }
 
+/* ------------------------------------------------------------ GRAD */
+
+/* 256 colours: the corner each pixel takes. Each corner keeps its 2x2
+ * quadrant except the four centre pixels, which take the opposite corner:
+ * the middle of the block mixes all four (a CRT blurs it into a ramp), and
+ * every corner has 4 pixels. */
+const uint8_t stv_grad_pattern[16] = {
+    0, 0, 1, 1,
+    0, 3, 2, 1,
+    2, 1, 0, 3,
+    2, 2, 3, 3,
+};
+
+#define SPREAD(c) (((uint32_t)(c) & 0x1F) | (((uint32_t)(c) & 0x3E0) << 5) | (((uint32_t)(c) & 0x7C00) << 10))
+#define FIELDS 0x01F07C1Fu          /* the three 5-bit fields of SPREAD, 10 bits apart */
+#define HALF   0x00401004u          /* 4 in each field: rounding for >> 3 */
+
+/* Direct colour: 4 corners blended at pixel centres; channels work side by
+ * side in one 32-bit word, 10 bits apart (31 x 8 fits in 10 bits). */
+void stv_grad_dc(const uint16_t *k, uint16_t *out)
+{
+    uint32_t tl = SPREAD(k[0]), tr = SPREAD(k[1]), bl = SPREAD(k[2]), br = SPREAD(k[3]);
+    for (int y = 0; y < 4; y++) {
+        uint32_t w1 = (uint32_t)(2 * y + 1), w0 = 8 - w1;
+        uint32_t l = ((tl * w0 + bl * w1 + HALF) >> 3) & FIELDS;
+        uint32_t r = ((tr * w0 + br * w1 + HALF) >> 3) & FIELDS;
+        for (int x = 0; x < 4; x++) {
+            uint32_t v1 = (uint32_t)(2 * x + 1), v0 = 8 - v1;
+            uint32_t v = ((l * v0 + r * v1 + HALF) >> 3) & FIELDS;
+            *out++ = (uint16_t)((v & 0x1F) | ((v >> 5) & 0x3E0) | ((v >> 10) & 0x7C00));
+        }
+    }
+}
+
 /* ------------------------------------------------------------ P8 pictures */
 
 static int decode_p8(streams *s, const stv_target *t)
@@ -119,7 +153,7 @@ static int decode_p8(streams *s, const stv_target *t)
             return STV_ERR_DATA;
         unsigned op = *ops++;
         int mode = op >> 5, n = (op & 31) + 1;
-        if (mode == STV_OP_SKIPLONG) {
+        if (mode == 7 && t->version < 2) {     /* SKIPLONG */
             mode = STV_OP_SKIP;
             n *= 32;
         }
@@ -188,6 +222,18 @@ static int decode_p8(streams *s, const stv_target *t)
                 NEXT();
             }
             break;
+        case STV_OP_GRAD:              /* (version 2: op 7) */
+            if (c + 4 * n > s->col_end) return STV_ERR_DATA;
+            while (n--) {
+                const uint8_t *q = c;
+                c += 4;
+                ROW(0) = PACK4(q[0], q[0], q[1], q[1]);
+                ROW(1) = PACK4(q[0], q[3], q[2], q[1]);
+                ROW(2) = PACK4(q[2], q[1], q[0], q[3]);
+                ROW(3) = PACK4(q[2], q[2], q[3], q[3]);
+                NEXT();
+            }
+            break;
         case STV_OP_MOVE:
             if (v + 2 * n > s->mv_end) return STV_ERR_DATA;
             while (n--) {
@@ -245,7 +291,7 @@ static int decode_dc(streams *s, const stv_target *t)
             return STV_ERR_DATA;
         unsigned op = *ops++;
         int mode = op >> 5, n = (op & 31) + 1;
-        if (mode == STV_OP_SKIPLONG) {
+        if (mode == 7 && t->version < 2) {     /* SKIPLONG */
             mode = STV_OP_SKIP;
             n *= 32;
         }
@@ -324,6 +370,19 @@ static int decode_dc(streams *s, const stv_target *t)
                 W(2, 0) = RAWPIX(r + 16); W(2, 1) = RAWPIX(r + 20);
                 W(3, 0) = RAWPIX(r + 24); W(3, 1) = RAWPIX(r + 28);
                 r += 32;
+                NEXT();
+            }
+            break;
+        case STV_OP_GRAD:              /* (version 2: op 7) */
+            if (c + 8 * n > s->col_end) return STV_ERR_DATA;
+            while (n--) {
+                uint16_t k[4] = { ld16(c), ld16(c + 2), ld16(c + 4), ld16(c + 6) }, px[16];
+                c += 8;
+                stv_grad_dc(k, px);
+                for (int y = 0; y < 4; y++) {
+                    W(y, 0) = PACK2(px[4 * y], px[4 * y + 1]);
+                    W(y, 1) = PACK2(px[4 * y + 2], px[4 * y + 3]);
+                }
                 NEXT();
             }
             break;

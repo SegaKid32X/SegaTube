@@ -113,7 +113,7 @@ LONGMOVIE := $(OBJ)/testsd-long/MOVIES/Long-Test
 $(LONGMOVIE)/INFO.STI: $(TESTCLIP) $(OBJ)/stvenc converter/segatube_convert.py
 	rm -rf $(OBJ)/testsd-long
 	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd-long --title "Long-Test" \
-	    --modes full --quality 3 --duration 11
+	    --modes full --quality 3 --duration 9
 test-rom-long: $(OBJ)/$(TARGET).raw $(LONGMOVIE)/INFO.STI | rom
 	python3 tools/mkvfs.py $(OBJ)/$(TARGET).raw rom/$(TARGET)-long.32x "$(LONGMOVIE)"
 	python3 tools/romfix.py rom/$(TARGET)-long.32x --pow2 --gran 524288

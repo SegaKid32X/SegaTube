@@ -14,6 +14,7 @@ typedef struct {
     int      bw;        /* picture width in 4x4 blocks */
     int      bh;        /* picture height in blocks */
     int      depth;     /* STV_DEPTH_P8 or STV_DEPTH_DC */
+    int      version;   /* the file's STV version (op 7: 1 SKIPLONG, 2 GRAD) */
 } stv_target;
 
 #define STV_OK          0
@@ -26,6 +27,13 @@ typedef struct {
  * error the blocks decoded so far stay written and nothing outside the
  * part's rows is touched. */
 int stv_decode_part(const uint8_t *part, uint32_t len, const stv_target *t);
+
+/* GRAD blocks (the encoder uses these to know exactly what the decoder
+ * draws). stv_grad_pattern[i]: which corner (0 TL, 1 TR, 2 BL, 3 BR) pixel i
+ * of a 256-colour block takes. stv_grad_dc: the 16 BGR555 pixels blended
+ * from 4 corners. */
+extern const uint8_t stv_grad_pattern[16];
+void stv_grad_dc(const uint16_t *corner, uint16_t *out);
 
 /* Streams of a part, for tools: offsets from the part start */
 typedef struct {

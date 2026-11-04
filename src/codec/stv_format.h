@@ -54,7 +54,7 @@
 #define STV_MAGIC           0x53545631u     /* "STV1" */
 #define STV_INFO_MAGIC      0x53544931u     /* "STI1" */
 #define STV_CHUNK_MAGIC     0x43484E4Bu     /* "CHNK" */
-#define STV_VERSION         1
+#define STV_VERSION         2   /* 2: op 7 is GRAD (1: SKIPLONG) */
 
 #define STV_FILE_HEADER     4096
 #define STV_INFO_HEADER     4096
@@ -174,7 +174,12 @@ typedef struct {
  *            one mv word each: dx in the high byte, dy in the low byte
  *            (signed pixels). The source lies inside the part's rows; the 4x4
  *            source is read whole before the block is written.
- *   SKIPLONG n x 32 blocks skipped
+ *   SKIPLONG (version 1 files) n x 32 blocks skipped
+ *   GRAD     (version 2) n blocks, each 4 colours (col): the block's corners,
+ *            top-left, top-right, bottom-left, bottom-right. Direct colour:
+ *            blended bilinearly (stv_grad_dc). 256 colours: each pixel takes
+ *            one corner by a fixed ordered-dither pattern (stv_grad_pattern),
+ *            which a CRT blurs into a smooth ramp.
  */
 #define STV_OP_SKIP         0
 #define STV_OP_FILL         1
@@ -183,7 +188,8 @@ typedef struct {
 #define STV_OP_QUAD         4
 #define STV_OP_RAW          5
 #define STV_OP_MOVE         6
-#define STV_OP_SKIPLONG     7
+#define STV_OP_SKIPLONG     7   /* version 1 */
+#define STV_OP_GRAD         7   /* version 2 */
 #define STV_OP(mode, n)     ((uint8_t)(((mode) << 5) | ((n) - 1)))
 
 /* INFO.STI: the library's view of a movie */

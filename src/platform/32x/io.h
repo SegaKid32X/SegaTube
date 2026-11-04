@@ -16,7 +16,7 @@ int  io_read(uint32_t off, void *dst, uint32_t len);
 /* The open profile: header and chunk index */
 typedef struct {
     int      movie, kind;
-    int      depth, interlaced;
+    int      version, depth, interlaced;
     int      pic_w, pic_h, pic_x, pic_y;
     uint32_t fps_num, fps_den, rate;
     uint32_t frames, chunks, max_record, duration_ms;

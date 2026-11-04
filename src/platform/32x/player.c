@@ -264,6 +264,7 @@ static void decode_picture(const uint8_t *pic)
     t.bw = mv.pic_w / 4;
     t.bh = mv.pic_h / 4;
     t.depth = mv.depth;
+    t.version = mv.version;
     if (parts > 2) parts = 2;
     if (parts == 2) {
         uint32_t o1 = rd32(q + 4);
