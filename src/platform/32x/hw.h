@@ -55,7 +55,6 @@
 #define CMD_SD_INIT 1
 #define CMD_OPEN    2
 #define CMD_READ    3
-#define CMD_STATS   4
 #define CMD_OSD     5
 #define CMD_LIBRARY 6
 #define CMD_MESSAGE 7
@@ -138,7 +137,6 @@ uint16_t hw_vblanks(void);
 typedef void (*slave_fn)(int arg);
 void hw_slave_start(slave_fn fn, int arg);
 int  hw_slave_wait(void);
-int  hw_slave_busy(void);
 void hw_cache_purge(void);
 void hw_cache_purge_range(const void *p, uint32_t len);
 

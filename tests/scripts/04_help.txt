@@ -1,5 +1,5 @@
-# The controls pop-up: MODE in the library and while watching, B in the
-# library (3-button pads); any button closes it.
+# The controls pop-up: MODE in the library, or B (3-button pads); any button
+# closes it. While watching, MODE does nothing.
 # pad6
 run 150
 shot library
@@ -19,15 +19,7 @@ run 90
 shot play
 press mode 6
 run 30
-shot help_playing
-run 60
-shot help_still
-press c 6
-run 30
-shot playing_again
-press y 6
-run 75
-shot stats
+shot mode_while_playing
 press b 6
 run 60
 shot back_library

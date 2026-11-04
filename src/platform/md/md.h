@@ -54,7 +54,7 @@
 #define CMD_SD_INIT 1   /* -> number of movies (0xFE: no EverDrive, 0xFF: error) */
 #define CMD_OPEN    2   /* P1 movie, P2 kind | part << 8 (KIND_*) -> 0 or error */
 #define CMD_READ    3   /* P1:P2 file offset, P3 slot << 8 | 256-byte units (0 = 128) */
-#define CMD_STATS   4   /* the stats lines (see osd_stats) */
+                        /* 4: unused (was the 480i switch) */
 #define CMD_OSD     5   /* P1 OSD_* flags, P2 position s, P3 duration s */
 #define CMD_LIBRARY 6   /* P1 first movie | mode << 12, P2 cursor, P3 duration s of the cursor's */
 #define CMD_MESSAGE 7   /* P1 MSG_*, P2 value */
@@ -138,7 +138,6 @@ void osd_library(int first, int cursor, uint16_t dur, int mode);
 void osd_message(int msg, int value);
 void osd_boot(const char *line1, const char *line2);
 void osd_help(int show);
-int  pad_3button(void);
-void osd_stats(uint16_t p1, uint16_t p2, uint16_t p3);            /* the pad has no X Y Z MODE */
+int  pad_3button(void);            /* the pad has no X Y Z MODE */
 
 #endif

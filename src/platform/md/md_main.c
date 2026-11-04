@@ -149,9 +149,6 @@ static unsigned run_command(int cmd, uint16_t p1, uint16_t p2, uint16_t p3)
             return 0xFF;
         return (unsigned)ed_read_to_cart(off, dst, len);
     }
-    case CMD_STATS:
-        osd_stats(p1, p2, p3);
-        return 0;
     case CMD_OSD:
         osd_draw(p1, p2, p3, osd_movie);
         return 0;

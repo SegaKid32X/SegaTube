@@ -190,11 +190,6 @@ uint32_t audio_position(void)
     return cur;
 }
 
-int audio_block_playing(void)
-{
-    return ST->cur != 0xFFFFFFFFu;
-}
-
 uint32_t audio_underruns(void)
 {
     return ST->underruns;

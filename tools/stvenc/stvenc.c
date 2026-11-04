@@ -337,18 +337,15 @@ typedef struct {
     int bytes;
 } choice;
 
-/* Decode cost of a block for each op in SH-2 cycles, P8 and DC: measured on
- * a console (NTSC 32X, the hardware test's DECODE SPEED page, both SH-2s
- * decoding, picture on screen), plus about 10%. Writes to the frame buffer
- * cost ~11 cycles a 16-bit word; MOVE also reads it, slower still. */
-static const int cost_p8[8] = { 5, 100, 100, 110, 185, 130, 380, 5 };
-static const int cost_dc[8] = { 5, 200, 200, 225, 240, 250, 570, 5 };
+/* Per-mode decode cost estimates in SH-2 cycles, P8 and DC (tuned by
+ * the benchmark build; see docs/DESIGN.md). */
+static const int cost_p8[8] = { 6, 40, 30, 70, 110, 50, 140, 6 };
+static const int cost_dc[8] = { 6, 60, 50, 110, 160, 90, 220, 6 };
 
 typedef struct {
     const palette *pal;             /* P8 */
     int depth;
     double lambda;
-    double mu;                      /* weight of decode cycles (0: none) */
 } coder;
 
 static inline rgb px_rgb(const coder *c, unsigned v)
@@ -449,12 +446,11 @@ static void choose(const coder *c, const rgb *src, const fbuf *ref, int bx, int 
                    int intra, int prow0, int prow1, const int8_t (*mvc)[2], int nmvc, choice *out)
 {
     const int dc = c->depth == STV_DEPTH_DC;
-    const double lam = c->lambda, mu = c->mu;
-    const int *ct = dc ? cost_dc : cost_p8;
+    const double lam = c->lambda;
     double bestj = 1e300;
     choice t;
 
-#define CONSIDER() do { double j = (double)t.err + lam * t.bytes + mu * ct[t.mode]; if (j < bestj) { bestj = j; *out = t; } } while (0)
+#define CONSIDER() do { double j = (double)t.err + lam * t.bytes; if (j < bestj) { bestj = j; *out = t; } } while (0)
 
     if (!intra) {
         memset(&t, 0, sizeof t);
@@ -736,8 +732,6 @@ static int pick_split(const split_state *s, int bh)
 
 /* Code one picture into out. f is updated to what the decoder will hold.
  * Returns the distortion. Checks the result with the real decoder. */
-static long g_pics, g_slowed, g_over, g_cost_max;   /* decode budget stats */
-
 static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int intra, int flags,
                          const palette *newpal, split_state *ss, bytes *out, long *cost_max)
 {
@@ -752,28 +746,13 @@ static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int int
     memcpy(before.mem, f->mem, (size_t)f->pitch * bh * 4);
 
     part_out parts[MAX_PARTS];
+    memset(parts, 0, sizeof parts);
     long dist = 0;
-    /* a picture the SH-2s cannot decode in time is coded again with decode
-     * cycles weighing more and more against the error */
-    coder cc = *c;
-    for (int tries = 0;; tries++) {
-        memset(parts, 0, sizeof parts);
-        dist = 0;
-        *cost_max = 0;
-        for (int k = 0; k < nparts; k++) {
-            code_part(&cc, src, w, f, intra, rows[k], rows[k + 1], &parts[k], &dist);
-            if (parts[k].cost > *cost_max) *cost_max = parts[k].cost;
-        }
-        if (*cost_max <= opt.cost_budget || tries == 9)
-            break;
-        for (int k = 0; k < nparts; k++) part_free(&parts[k]);
-        memcpy(f->mem, before.mem, (size_t)f->pitch * bh * 4);
-        cc.mu = cc.mu > 0 ? cc.mu * 2.5 : cc.lambda / 20;
+    *cost_max = 0;
+    for (int k = 0; k < nparts; k++) {
+        code_part(c, src, w, f, intra, rows[k], rows[k + 1], &parts[k], &dist);
+        if (parts[k].cost > *cost_max) *cost_max = parts[k].cost;
     }
-    g_pics++;
-    if (cc.mu > 0) g_slowed++;
-    if (*cost_max > opt.cost_budget) g_over++;
-    if (*cost_max > g_cost_max) g_cost_max = *cost_max;
     /* per-row costs for the next split */
     {
         const int *cost = c->depth == STV_DEPTH_DC ? cost_dc : cost_p8;
@@ -810,7 +789,7 @@ static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int int
     set32(out->p + start + 4, (uint32_t)(out->n - start));
 
     /* the real decoder, on what we wrote, must give the same buffer */
-    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION, 0 };
+    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION };
     for (int k = 0; k < nparts; k++) {
         int e = stv_decode_part(out->p + part_at[k], (uint32_t)(out->n - part_at[k]), &t);
         if (e != STV_OK) {
@@ -1040,13 +1019,8 @@ int main(int argc, char **argv)
     const double fps = (double)opt.fps_num / opt.fps_den;
     /* decode budget per picture per SH-2: ~23 MHz, most of a frame (or a
      * field for two-field records), minus audio, copying and bus contention */
-    /* A picture is decoded while the one before it is on screen: at 24 fps
-     * on a 60 Hz TV (3:2) every other frame shows for only 2 vblanks. */
-    const double vrate = 60000.0 / 1001;
-    int vbl = (int)(vrate / fps + 0.01);
-    if (vbl < 1) vbl = 1;
-    double pic_time = fields == 2 ? 1.0 / vrate : vbl / vrate;
-    opt.cost_budget = 23.0e6 * pic_time * 0.75;
+    double pic_time = fields == 2 ? 1.0 / 59.94 : 1.0 / (fps > 30 ? 30 : fps);
+    opt.cost_budget = 23.0e6 * pic_time * (fields == 2 ? 0.60 : 0.70);
 
     int lead = (int)(fps * 0.25 + 0.5);
     if (lead < 2) lead = 2;
@@ -1176,7 +1150,8 @@ int main(int argc, char **argv)
                 ss[k] = ss_save[k];
             }
             au.l = al_save; au.r = ar_save; au.pos = apos_save;
-            coder cd = { &pal_cur, depth, lam, 0 };
+            coder cd = { &pal_cur, depth, lam };
+            int over_cost = 0;
 
             put32(&chunk, STV_CHUNK_MAGIC);
             put32(&chunk, chunks);
@@ -1248,6 +1223,7 @@ int main(int argc, char **argv)
                     long cmax = 0;
                     chunk_dist += code_picture(&cd, gop[i].pic[k], w, target, intra,
                                                k ? STV_PIC_FIELD_ODD : 0, np, s, &chunk, &cmax);
+                    if (cmax > opt.cost_budget) over_cost = 1;
                 }
                 uint32_t rsize = (uint32_t)(chunk.n - rec);
                 set32(chunk.p + rec, rsize);
@@ -1255,7 +1231,7 @@ int main(int argc, char **argv)
             }
             set32(chunk.p + 16, (uint32_t)chunk.n);
             set32(chunk.p + 20, (uint32_t)sample_of_frame(frame_no));
-            if ((chunk.n <= budget && rec_max <= opt.max_record) || attempt == 7)
+            if ((chunk.n <= budget && rec_max <= opt.max_record && !over_cost) || attempt == 7)
                 break;
             lam *= chunk.n > budget * 1.5 || rec_max > opt.max_record * 1.5 ? 2.0 : 1.4;
         }
@@ -1354,8 +1330,5 @@ int main(int argc, char **argv)
             "largest record %u bytes, psnr %.2f dB\n",
             frame_no, secs, chunks, total_bytes / 1048576.0, total_bytes / secs / 1024, max_record,
             10 * log10(255.0 * 255 * (WR + WG + WB) / (total_dist / (double)total_px + 1e-9)));
-    fprintf(stderr, "stvenc: decode time: %ld of %ld pictures simplified to fit, %ld still over; "
-            "slowest %.1f ms of %.1f ms\n", g_slowed, g_pics, g_over,
-            g_cost_max / 23.0e3, opt.cost_budget / 23.0e3 / 0.75);
     return 0;
 }
