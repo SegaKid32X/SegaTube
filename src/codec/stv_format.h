@@ -8,6 +8,7 @@
  *   MOVIES/<name>/INFO.STI    title, poster, scrub thumbnails, the profiles
  *   MOVIES/<name>/FILM.STV    one file per picture profile (any subset)
  *   MOVIES/<name>/FULL.STV
+ *   MOVIES/<name>/I480.STV
  *
  * The EverDrive's file pointer is 32-bit, so a profile file stays under
  * 4 GB: a longer one continues in FILM.ST1, FILM.ST2 ... (the index says which
@@ -28,7 +29,7 @@
  *   u16 audio_samples          stereo samples of ADPCM in this record (main part)
  *   u16 preroll_samples        first record of a chunk only: audio played
  *                              only after a seek (see DESIGN.md), else 0
- *   u16 pic_count              pictures: 1 (2: two fields, unused)
+ *   u16 pic_count              pictures: 1 (progressive) or 2 (480i fields)
  *   u16 flags                  STV_REC_*
  *   stv_adpcm_state state[2]   (if STV_REC_ADPCM_STATE) L and R state to load
  *                              before the main audio part
@@ -53,7 +54,7 @@
 #define STV_MAGIC           0x53545631u     /* "STV1" */
 #define STV_INFO_MAGIC      0x53544931u     /* "STI1" */
 #define STV_CHUNK_MAGIC     0x43484E4Bu     /* "CHNK" */
-#define STV_VERSION         2   /* 2: op 7 is GRAD (1: SKIPLONG) */
+#define STV_VERSION         1
 
 #define STV_FILE_HEADER     4096
 #define STV_INFO_HEADER     4096
@@ -66,7 +67,7 @@
 /* Profiles */
 #define STV_PROF_FILM       0   /* direct colour (RGB555), up to 320x204, 24 fps */
 #define STV_PROF_FULL       1   /* 256 colours a scene, 320x224, up to 30 fps */
-#define STV_PROF_I480       2   /* reserved (was 480i: the 32X draws one field half a line late) */
+#define STV_PROF_I480       2   /* 256 colours, 320x448 interlaced (two fields) */
 #define STV_PROF_COUNT      3
 
 /* Pixel depth of a profile's pictures */
@@ -173,12 +174,7 @@ typedef struct {
  *            one mv word each: dx in the high byte, dy in the low byte
  *            (signed pixels). The source lies inside the part's rows; the 4x4
  *            source is read whole before the block is written.
- *   SKIPLONG (version 1 files) n x 32 blocks skipped
- *   GRAD     (version 2) n blocks, each 4 colours (col): the block's corners,
- *            top-left, top-right, bottom-left, bottom-right. Direct colour:
- *            blended bilinearly (stv_grad_dc). 256 colours: each pixel takes
- *            one corner by a fixed ordered-dither pattern (stv_grad_pattern),
- *            which a CRT blurs into a smooth ramp.
+ *   SKIPLONG n x 32 blocks skipped
  */
 #define STV_OP_SKIP         0
 #define STV_OP_FILL         1
@@ -187,8 +183,7 @@ typedef struct {
 #define STV_OP_QUAD         4
 #define STV_OP_RAW          5
 #define STV_OP_MOVE         6
-#define STV_OP_SKIPLONG     7   /* version 1 */
-#define STV_OP_GRAD         7   /* version 2 */
+#define STV_OP_SKIPLONG     7
 #define STV_OP(mode, n)     ((uint8_t)(((mode) << 5) | ((n) - 1)))
 
 /* INFO.STI: the library's view of a movie */

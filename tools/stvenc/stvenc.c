@@ -3,7 +3,7 @@
  *
  * Reads raw RGB24 video frames on stdin (already scaled to the picture size
  * by ffmpeg) and raw s16le stereo audio from a file, and writes one profile
- * file (FILM.STV / FULL.STV, see src/codec/stv_format.h).
+ * file (FILM.STV / FULL.STV / I480.STV, see src/codec/stv_format.h).
  *
  * The encoder runs the player's own decoder (src/codec/stv_dec.c) on every
  * picture it writes, into a model of the 32X frame buffers, so what it
@@ -22,10 +22,6 @@
 #include <math.h>
 #include <errno.h>
 #include "stv_dec.h"
-/* The first encoder: version 1 files (op 7 = SKIPLONG). The player also
- * plays version 2 (gradient blocks, an experiment that was dropped). */
-#define ENC_VERSION 1
-
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -52,6 +48,7 @@ typedef struct {
     double quality;                 /* 1 (small) .. 10 (best) */
     uint32_t rate_cap;              /* bytes per second the SD stream can sustain */
     uint32_t max_record;            /* largest record the player buffers */
+    int temporal_fields;            /* I480: two input frames per record */
     int gop;                        /* frames per chunk (max) */
     int verbose;
     double cost_budget;             /* decode cycles per picture per CPU */
@@ -789,7 +786,7 @@ static long code_picture(const coder *c, const rgb *src, int w, fbuf *f, int int
     set32(out->p + start + 4, (uint32_t)(out->n - start));
 
     /* the real decoder, on what we wrote, must give the same buffer */
-    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth, ENC_VERSION };
+    stv_target t = { before.mem, before.pitch, before.bw, before.bh, before.depth };
     for (int k = 0; k < nparts; k++) {
         int e = stv_decode_part(out->p + part_at[k], (uint32_t)(out->n - part_at[k]), &t);
         if (e != STV_OK) {
@@ -906,7 +903,7 @@ static int read_frame(rgb *dst, int w, int h)
 /* ------------------------------------------------------------ main loop */
 
 typedef struct {
-    rgb *pic[2];                    /* pic[0] (pic[1]: a second field, unused) */
+    rgb *pic[2];                    /* progressive: pic[0]; I480: even, odd field */
     double diff;                    /* scene change measure vs. the previous frame */
 } frame;
 
@@ -938,7 +935,22 @@ static int read_input(input_ctx *c, int slot)
     const int w = c->w, h = c->h;
     frame *fr = &c->gop[slot];
     int ok;
-    ok = read_frame(fr->pic[0], w, h) == 1;
+    if (c->fields == 1) {
+        ok = read_frame(fr->pic[0], w, h) == 1;
+    } else {
+        ok = read_frame(c->inbuf, w, 2 * h) == 1;
+        if (ok)
+            for (int y = 0; y < h; y++) {
+                memcpy(fr->pic[0] + y * w, c->inbuf + (2 * y) * w, (size_t)w * sizeof(rgb));
+                memcpy(fr->pic[1] + y * w, c->inbuf + (2 * y + 1) * w, (size_t)w * sizeof(rgb));
+            }
+        if (ok && opt.temporal_fields) {        /* the odd field from the next frame */
+            ok = read_frame(c->inbuf, w, 2 * h) == 1;
+            if (ok)
+                for (int y = 0; y < h; y++)
+                    memcpy(fr->pic[1] + y * w, c->inbuf + (2 * y + 1) * w, (size_t)w * sizeof(rgb));
+        }
+    }
     if (!ok) {
         *c->eof = 1;
         return 0;
@@ -952,11 +964,12 @@ static int read_input(input_ctx *c, int slot)
 static void usage(void)
 {
     fprintf(stderr,
-        "usage: stvenc --profile film|full --size WxH --pos X,Y --fps N/D\n"
+        "usage: stvenc --profile film|full|i480 --size WxH --pos X,Y --fps N/D\n"
         "              --out PATH [--audio FILE --audio-rate HZ] [--frames N]\n"
         "              [--title TEXT] [--quality 1-10] [--rate-cap BYTES_PER_S]\n"
-        "              [--max-record BYTES] [--gop N] [-v]\n"
-        "video: raw RGB24 frames on stdin, WxH\n");
+        "              [--max-record BYTES] [--temporal-fields] [--gop N] [-v]\n"
+        "video: raw RGB24 frames on stdin, WxH (I480: Wx2H, or two WxH-field\n"
+        "frames per record with --temporal-fields: Wx2H frames, alternate fields)\n");
     exit(1);
 }
 
@@ -974,7 +987,8 @@ static void parse(int argc, char **argv)
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
 #define ARG(name) (!strcmp(a, name) && v && (i++, 1))
         if (ARG("--profile")) {
-            opt.profile = !strcmp(v, "film") ? STV_PROF_FILM : !strcmp(v, "full") ? STV_PROF_FULL : -1;
+            opt.profile = !strcmp(v, "film") ? STV_PROF_FILM : !strcmp(v, "full") ? STV_PROF_FULL :
+                          !strcmp(v, "i480") ? STV_PROF_I480 : -1;
         } else if (ARG("--size")) {
             if (sscanf(v, "%dx%d", &opt.w, &opt.h) != 2) usage();
         } else if (ARG("--pos")) {
@@ -990,6 +1004,7 @@ static void parse(int argc, char **argv)
         else if (ARG("--rate-cap")) opt.rate_cap = (uint32_t)atoi(v);
         else if (ARG("--max-record")) opt.max_record = (uint32_t)atoi(v);
         else if (ARG("--gop")) opt.gop = atoi(v);
+        else if (!strcmp(a, "--temporal-fields")) opt.temporal_fields = 1;
         else if (!strcmp(a, "-v")) opt.verbose = 1;
         else usage();
 #undef ARG
@@ -997,7 +1012,7 @@ static void parse(int argc, char **argv)
     if (opt.profile < 0 || !opt.out || opt.w <= 0 || opt.h <= 0) usage();
     if (opt.w % 4 || opt.h % 4 || opt.x % 4 || opt.w > MAX_W || opt.h > MAX_H ||
         opt.x + opt.w > MAX_W || opt.y + opt.h > MAX_H)
-        die("%s", "picture must be multiples of 4 and fit 320x224");
+        die("%s", "picture must be multiples of 4 and fit 320x224 (a field, for i480)");
     if (opt.profile == STV_PROF_FILM && opt.h > STV_DC_MAX_ROWS)
         die("%s", "film pictures are at most 203 rows (direct colour)");
     if (!opt.gop) {
@@ -1014,11 +1029,11 @@ int main(int argc, char **argv)
 #endif
     parse(argc, argv);
     const int depth = opt.profile == STV_PROF_FILM ? STV_DEPTH_DC : STV_DEPTH_P8;
-    const int fields = 1;           /* (the format allows two field pictures a record) */
+    const int fields = opt.profile == STV_PROF_I480 ? 2 : 1;
     const int w = opt.w, h = opt.h, bw = w / 4, bh = h / 4;
     const double fps = (double)opt.fps_num / opt.fps_den;
     /* decode budget per picture per SH-2: ~23 MHz, most of a frame (or a
-     * field for two-field records), minus audio, copying and bus contention */
+     * field for i480), minus audio, copying and bus contention */
     double pic_time = fields == 2 ? 1.0 / 59.94 : 1.0 / (fps > 30 ? 30 : fps);
     opt.cost_budget = 23.0e6 * pic_time * (fields == 2 ? 0.60 : 0.70);
 
@@ -1291,7 +1306,7 @@ int main(int argc, char **argv)
     bytes hdr;
     memset(&hdr, 0, sizeof hdr);
     put32(&hdr, STV_MAGIC);
-    put16(&hdr, ENC_VERSION);
+    put16(&hdr, STV_VERSION);
     put16(&hdr, (unsigned)opt.profile);
     put16(&hdr, (unsigned)depth);
     put16(&hdr, fields == 2);

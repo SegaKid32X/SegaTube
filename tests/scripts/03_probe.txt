@@ -1,8 +1,18 @@
 # rom: probe
 run 400
+press a 6
+run 400
 shot allow_dark_p1
 press a 6
-run 12
-shot allow_dark_p2_rerun
-run 400
+run 60
+shot allow_dark_p2
+press right 6
+run 20
+press right 6
+run 20
+press down 6
+run 30
 shot allow_dark_p3
+press start 6
+run 60
+shot allow_dark_p4

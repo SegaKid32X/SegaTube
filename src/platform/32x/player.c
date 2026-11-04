@@ -7,13 +7,15 @@
  * (the master decodes the top part, the slave the bottom), and it goes on
  * screen when the audio clock reaches its time.
  *
- * Both profiles (FILM, FULL) double-buffer: frame f is decoded into the
- * buffer that showed frame f-2, which is exactly what its P pictures refer
- * to.
+ * Progressive profiles (FILM, FULL) double-buffer: frame f is decoded into
+ * the buffer that showed frame f-2, which is exactly what its P pictures
+ * refer to. 480i shows the even field's buffer in even TV fields and the odd
+ * one in odd fields, every field; each field picture is decoded into its
+ * buffer during the other field.
  *
  * Seeking, fast forward and rewind work in chunks (about a second): each
- * chunk starts with two intra pictures in a row and audio for its first
- * moments.
+ * chunk starts with intra pictures (two in a row for progressive, both
+ * fields for 480i) and audio for its first moments.
  */
 #include <string.h>
 #include "hw.h"
@@ -48,11 +50,11 @@ void pad_poll(void)
 }
 
 /* Forget presses made while nobody was reading the pad (the 68000 keeps
- * them until we take them), e.g. during "THE END"; buttons still held are
- * not new presses. */
+ * them until we take them), e.g. during "THE END": B there must not open
+ * the controls panel in the library. Held buttons are not new presses. */
 void pad_flush(void)
 {
-    hw_pad();                       /* taken: the 68000 drops them at its next vblank */
+    hw_pad();
     hw_wait_vblank();
     hw_wait_vblank();
     pad_last = hw_pad();
@@ -275,7 +277,6 @@ static void decode_picture(const uint8_t *pic)
     t.bw = mv.pic_w / 4;
     t.bh = mv.pic_h / 4;
     t.depth = mv.depth;
-    t.version = mv.version;
     if (parts > 2) parts = 2;
     if (parts == 2) {
         uint32_t o1 = rd32(q + 4);
@@ -296,9 +297,16 @@ static void decode_picture(const uint8_t *pic)
 
 /* ------------------------------------------------------------ screen */
 
+static int interlaced;
+static int field_swap;              /* 480i: which buffer the even field uses */
+static int i480_idle;               /* 480i: keep alternating the buffers in service() */
+static int last_vblk;
+
 static void set_video(void)
 {
     hw_video_mode(mv.depth, mv.pic_y, mv.pic_h);
+    interlaced = mv.interlaced;
+    ui_cmd(CMD_VIDEO, (uint16_t)interlaced, 0, 0);
     if (mv.depth == 1) {
         memset(palette, 0, sizeof palette);
         hw_load_palette(palette);
@@ -347,10 +355,17 @@ static void osd_hide(void)
 
 static uint16_t svc_vbl;
 
-/* Called in every wait: moves the stream along, counts the OSD down. */
+/* Called in every wait: moves the stream along, keeps 480i alternating. */
 static void service(void)
 {
     stream_poll();
+    int v = hw_in_vblank();
+    if (v && !last_vblk && interlaced && i480_idle) {
+        /* the field that starts after this one has the other parity */
+        int odd_next = !(hw_flags() & FL_ODD);
+        hw_request_show(odd_next ^ field_swap);
+    }
+    last_vblk = v;
     uint16_t vb = hw_vblanks();
     if (vb != svc_vbl) {
         if (osd_timer > 0 && --osd_timer == 0)
@@ -421,9 +436,21 @@ static int show_key(int c)
     seek_chunk(c);
     rec_t r;
     if (!wait_record(&r)) return 0;
-    decode_picture(r.pic[0]);
-    show_back();
-    if (r.palette) hw_load_palette(palette);
+    if (interlaced) {
+        i480_idle = 0;
+        decode_picture(r.pic[0]);
+        show_back();
+        if (r.palette) hw_load_palette(palette);
+        if (r.pics > 1) {
+            decode_picture(r.pic[1]);
+            show_back();
+        }
+        i480_idle = 1;
+    } else {
+        decode_picture(r.pic[0]);
+        show_back();
+        if (r.palette) hw_load_palette(palette);
+    }
     shown_frame = r.frame;
     stream_hold(0);
     return 1;
@@ -435,6 +462,7 @@ static int scan(int dir)
 {
     int speed = 1;
     audio_pause(1);
+    i480_idle = 1;
     uint32_t pos = now_ms();
     int shown = movie_chunk_of_frame(shown_frame);
     uint16_t last = hw_vblanks();
@@ -466,6 +494,7 @@ static int scan(int dir)
             break;
         }
     }
+    i480_idle = 0;
     return shown;
 }
 
@@ -526,6 +555,7 @@ static void draw_thumb(void)
 static int scrub(void)
 {
     audio_pause(1);
+    i480_idle = 1;
     int start_chunk = movie_chunk_of_frame(shown_frame);
     if (!have_info) return start_chunk;
     stream_stop();
@@ -556,26 +586,30 @@ static int scrub(void)
             drawn = n;
             /* both buffers, so it stays put whichever is on screen */
             draw_thumb();
-            show_back();
+            if (!interlaced) {
+                show_back();
+            } else {
+                int b = hw_back_buffer();       /* service() alternates them */
+                for (int w = 0; w < 4000000 && hw_back_buffer() == b; w++)
+                    service();
+            }
             draw_thumb();
         }
         service();
     }
+    i480_idle = 0;
     return result;
 }
 
-static int has_kind(int k)
-{
-    return !have_info || (inf.profiles >> (k - KIND_FILM) & 1);
-}
-
-/* The other picture mode (FILM <-> FULL), if the movie has it */
 static int next_kind(int kind)
 {
-    int k = kind == KIND_FILM ? KIND_FULL : KIND_FILM;
-    return has_kind(k) ? k : kind;
+    for (int i = 1; i <= 3; i++) {
+        int k = KIND_FILM + (kind - KIND_FILM + i) % 3;
+        if (!have_info || (inf.profiles >> (k - KIND_FILM) & 1))
+            return k;
+    }
+    return kind;
 }
-
 
 /* Start playing from chunk c: its first picture goes up at once. */
 static int start_at(int c)
@@ -604,6 +638,7 @@ static int handle_keys(int *seek_to)
         osd_timer = 180;
         show_osd_now(OSD_HINTS);
     }
+    if (p & PAD_MODE) field_swap ^= 1;
     if (p & (PAD_RIGHT | PAD_LEFT)) {
         int c = scan((p & PAD_RIGHT) ? 1 : -1);
         *seek_to = c;
@@ -621,9 +656,9 @@ static int handle_keys(int *seek_to)
     return ACT_NONE;
 }
 
-/* ---- playing ---- */
+/* ---- progressive ---- */
 
-static int play_from(int c)
+static int play_progressive(int c)
 {
     start_at(c);
     int have_next = 0, first = 1;
@@ -682,21 +717,119 @@ static int play_from(int c)
     }
 }
 
+/* ---- 480i ---- */
+
+/* The TV field's parity: the 68000 reports the VDP's ODD flag; we count
+ * fields ourselves and follow the flag once it is seen to alternate (an
+ * emulator, or a console where it does not, just alternates by count). */
+static int par_est, par_last_odd = -1, par_toggles;
+
+static void parity_sample(void)
+{
+    uint16_t f = hw_flags();
+    if (f & FL_BUSY) return;
+    int odd = f & FL_ODD;
+    par_toggles = (par_last_odd >= 0 && odd != par_last_odd) ? par_toggles + 1 : 0;
+    par_last_odd = odd;
+    if (par_toggles >= 4) par_est = odd;    /* the field on screen now */
+}
+
+static int play_interlaced(int c)
+{
+    start_at(c);
+    i480_idle = 0;
+    rec_t r;
+    int have = 0;               /* r is the current record */
+    int done[2] = { 0, 0 };     /* its fields decoded */
+    int started = 0;
+    const uint16_t *pal_pending = 0;
+    uint32_t field = mv.rate * 1001 / 60000;
+    for (;;) {
+        /* wait for the start of a field, servicing */
+        while (hw_in_vblank()) service();
+        int sampled = 0;
+        uint32_t spins = 0;
+        while (!hw_in_vblank()) {
+            service();
+            if (!sampled && ++spins > 200) { parity_sample(); sampled = 1; }
+            int seek_to = -1;
+            int act = handle_keys(&seek_to);
+            if (act != ACT_NONE) { if (have) stream_hold(0); return act; }
+            if (seek_to >= 0) {
+                if (have) stream_hold(0);
+                start_at(seek_to);
+                have = 0; started = 0;
+                osd_timer = 120;
+            }
+            if (osd_timer == -2) { osd_hide(); osd_timer = 0; }
+            else if (osd_timer != 0) show_osd_now(osd_timer < 0 ? OSD_HINTS : 0);
+        }
+        /* a field has just started (the other parity from the one we
+         * sampled); the one after it has the sampled parity again */
+        if (pal_pending) { hw_load_palette(pal_pending); pal_pending = 0; }
+        int u = par_est;
+        par_est = !par_est;                     /* the field now on screen */
+        i480_idle = 0;
+        int buf_u = u ^ field_swap;
+        if (paused) {
+            hw_request_show(buf_u);
+            continue;
+        }
+        if (!have) {
+            if (!peek_record(&r)) {
+                if (bad_stream || stream_error()) return ACT_ERROR;
+                if (stream_eof() && audio_queued() < 256) return ACT_END;
+                hw_request_show(buf_u);
+                continue;
+            }
+            record_audio(&r);
+            have = 1;
+            done[0] = done[1] = 0;
+        }
+        /* which frame the next field belongs to */
+        uint32_t t = now_sample() + field;
+        int decoded = 0;
+        if (!done[u] && (!started || t >= sample_of(r.frame))) {
+            if (hw_back_buffer() == buf_u) {
+                decode_picture(r.pic[u < r.pics ? u : 0]);
+                done[u] = 1;
+                decoded = 1;
+                if (r.palette) pal_pending = palette;
+            }
+        } else if (done[u] && done[!u] && t >= sample_of(r.frame + 1)) {
+            /* on to the next record */
+            drop_record(&r);
+            have = 0;
+            if (peek_record(&r)) {
+                record_audio(&r);
+                have = 1;
+                done[0] = done[1] = 0;
+                if (hw_back_buffer() == buf_u) {
+                    decode_picture(r.pic[u < r.pics ? u : 0]);
+                    done[u] = 1;
+                    decoded = 1;
+                    if (r.palette) pal_pending = palette;
+                }
+            }
+        }
+        (void)decoded;
+        hw_request_show(buf_u);
+        if (!started && done[0] && done[1]) {
+            started = 1;
+            audio_pause(0);
+        }
+        if (have) shown_frame = r.frame;
+    }
+}
+
 /* ------------------------------------------------------------ entry */
 
 int play_movie(int m, int kind)
 {
     cur_movie = m;
     have_info = info_read(m, &inf) == 0;
-    if (kind != KIND_FILM && kind != KIND_FULL) kind = KIND_FILM;
-    if (!has_kind(kind)) kind = next_kind(kind);
-    if (!has_kind(kind)) {
-        /* neither FILM nor FULL (converted with an old version?) */
-        ui_cmd(CMD_MESSAGE, MSG_NO_MODE, 0, 0);
-        for (int i = 0; i < 150; i++) hw_wait_vblank();
-        ui_cmd(CMD_MESSAGE, MSG_NONE, 0, 0);
-        return PLAY_ERROR;
-    }
+    if (have_info && !(inf.profiles >> (kind - KIND_FILM) & 1))
+        kind = next_kind(kind);
     ui_cmd(CMD_TITLE, (uint16_t)m, 0, 0);
     uint32_t resume_ms = 0;
     for (;;) {
@@ -722,10 +855,11 @@ int play_movie(int m, int kind)
         ui_cmd(CMD_MESSAGE, MSG_ERROR, 0x103, 0);
         for (int i = 0; i < 30; i++) hw_wait_vblank();
 #endif
+        field_swap = 0;
         osd_flags_shown = 0xFFFF;
         osd_timer = 150;
         int c = resume_ms ? movie_chunk_of_frame(frame_of_ms(resume_ms)) : 0;
-        int act = play_from(c);
+        int act = mv.interlaced ? play_interlaced(c) : play_progressive(c);
         stream_stop();
         audio_reset();
         if (act == ACT_MODE) {
@@ -735,6 +869,7 @@ int play_movie(int m, int kind)
             kind = k;
             continue;
         }
+        ui_cmd(CMD_VIDEO, 0, 0, 0);
         ui_cmd(CMD_OSD, OSD_HIDE, 0, 0);
         if (act == ACT_END) {
             ui_cmd(CMD_MESSAGE, MSG_END, 0, 0);

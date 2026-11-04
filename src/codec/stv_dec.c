@@ -100,55 +100,6 @@ static int move_ok(const streams *s, const stv_target *t, int x, int y, int dx, 
     return sx >= 0 && sx <= t->bw * 4 - 4 && sy >= s->row0 * 4 && sy <= s->row1 * 4 - 4;
 }
 
-/* ------------------------------------------------------------ GRAD */
-
-/* 256 colours: the corner each pixel takes. Each corner keeps its 2x2
- * quadrant except the four centre pixels, which take the opposite corner:
- * the middle of the block mixes all four (a CRT blurs it into a ramp), and
- * every corner has 4 pixels. */
-const uint8_t stv_grad_pattern[16] = {
-    0, 0, 1, 1,
-    0, 3, 2, 1,
-    2, 1, 0, 3,
-    2, 2, 3, 3,
-};
-
-#define SPREAD(c) (((uint32_t)(c) & 0x1F) | (((uint32_t)(c) & 0x3E0) << 5) | (((uint32_t)(c) & 0x7C00) << 10))
-#define FIELDS5 0x01F07C1Fu         /* three 5-bit fields, 10 bits apart */
-#define FIELDS6 0x03F0FC3Fu         /* three 6-bit fields */
-#define TWO     0x00200802u         /* 2 in each field: rounding for >> 2 */
-
-/* A 4x4 ordered dither, one value in each of the three fields: the blend
- * is worked out to 1/16 of a 5-bit step and then dithered down, so smooth
- * gradients look like about 9 bits a channel instead of 5. */
-#define D3(d) ((uint32_t)(d) | (uint32_t)(d) << 10 | (uint32_t)(d) << 20)
-static const uint32_t grad_dither[16] = {
-    D3(0),  D3(8),  D3(2),  D3(10),
-    D3(12), D3(4),  D3(14), D3(6),
-    D3(3),  D3(11), D3(1),  D3(9),
-    D3(15), D3(7),  D3(13), D3(5),
-};
-
-/* Direct colour: 4 corners blended at pixel centres ((2x+1)/8, (2y+1)/8).
- * The channels work side by side in one 32-bit word, 10 bits apart:
- * vertically 31 x 8 then >> 2 (62 at most), horizontally 62 x 8 + 15 (511
- * at most), so no field ever spills into the next. */
-void stv_grad_dc(const uint16_t *k, uint16_t *out)
-{
-    uint32_t tl = SPREAD(k[0]), tr = SPREAD(k[1]), bl = SPREAD(k[2]), br = SPREAD(k[3]);
-    const uint32_t *dz = grad_dither;
-    for (int y = 0; y < 4; y++) {
-        uint32_t w1 = (uint32_t)(2 * y + 1), w0 = 8 - w1;
-        uint32_t l = ((tl * w0 + bl * w1 + TWO) >> 2) & FIELDS6;       /* x2 */
-        uint32_t r = ((tr * w0 + br * w1 + TWO) >> 2) & FIELDS6;
-        for (int x = 0; x < 4; x++) {
-            uint32_t v1 = (uint32_t)(2 * x + 1), v0 = 8 - v1;
-            uint32_t v = ((l * v0 + r * v1 + *dz++) >> 4) & FIELDS5;  /* x16, dithered */
-            *out++ = (uint16_t)((v & 0x1F) | ((v >> 5) & 0x3E0) | ((v >> 10) & 0x7C00));
-        }
-    }
-}
-
 /* ------------------------------------------------------------ P8 pictures */
 
 static int decode_p8(streams *s, const stv_target *t)
@@ -168,7 +119,7 @@ static int decode_p8(streams *s, const stv_target *t)
             return STV_ERR_DATA;
         unsigned op = *ops++;
         int mode = op >> 5, n = (op & 31) + 1;
-        if (mode == 7 && t->version < 2) {     /* SKIPLONG */
+        if (mode == STV_OP_SKIPLONG) {
             mode = STV_OP_SKIP;
             n *= 32;
         }
@@ -237,18 +188,6 @@ static int decode_p8(streams *s, const stv_target *t)
                 NEXT();
             }
             break;
-        case STV_OP_GRAD:              /* (version 2: op 7) */
-            if (c + 4 * n > s->col_end) return STV_ERR_DATA;
-            while (n--) {
-                const uint8_t *q = c;
-                c += 4;
-                ROW(0) = PACK4(q[0], q[0], q[1], q[1]);
-                ROW(1) = PACK4(q[0], q[3], q[2], q[1]);
-                ROW(2) = PACK4(q[2], q[1], q[0], q[3]);
-                ROW(3) = PACK4(q[2], q[2], q[3], q[3]);
-                NEXT();
-            }
-            break;
         case STV_OP_MOVE:
             if (v + 2 * n > s->mv_end) return STV_ERR_DATA;
             while (n--) {
@@ -306,7 +245,7 @@ static int decode_dc(streams *s, const stv_target *t)
             return STV_ERR_DATA;
         unsigned op = *ops++;
         int mode = op >> 5, n = (op & 31) + 1;
-        if (mode == 7 && t->version < 2) {     /* SKIPLONG */
+        if (mode == STV_OP_SKIPLONG) {
             mode = STV_OP_SKIP;
             n *= 32;
         }
@@ -385,19 +324,6 @@ static int decode_dc(streams *s, const stv_target *t)
                 W(2, 0) = RAWPIX(r + 16); W(2, 1) = RAWPIX(r + 20);
                 W(3, 0) = RAWPIX(r + 24); W(3, 1) = RAWPIX(r + 28);
                 r += 32;
-                NEXT();
-            }
-            break;
-        case STV_OP_GRAD:              /* (version 2: op 7) */
-            if (c + 8 * n > s->col_end) return STV_ERR_DATA;
-            while (n--) {
-                uint16_t k[4] = { ld16(c), ld16(c + 2), ld16(c + 4), ld16(c + 6) }, px[16];
-                c += 8;
-                stv_grad_dc(k, px);
-                for (int y = 0; y < 4; y++) {
-                    W(y, 0) = PACK2(px[4 * y], px[4 * y + 1]);
-                    W(y, 1) = PACK2(px[4 * y + 2], px[4 * y + 3]);
-                }
                 NEXT();
             }
             break;

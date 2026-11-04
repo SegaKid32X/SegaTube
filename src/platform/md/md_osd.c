@@ -1,12 +1,10 @@
-/* md_osd.c - SegaTube's text layer: the Mega Drive VDP's planes, over the
+/* md_osd.c - SegaTube's text layer: the Mega Drive VDP's plane A, over the
  * 32X picture.
  *
- * Both planes are tile 0 (transparent) except where something is drawn, so
- * the 32X video shows everywhere else (the 32X priority bit is 0: the Mega
- * Drive layer is in front where it is not transparent). Text goes on plane A;
- * panels behind text go on plane B (the font's background is transparent).
- * The SH-2s never draw text; they ask for it (CMD_OSD, CMD_LIBRARY,
- * CMD_MESSAGE, CMD_HELP) and the 68000 redraws.
+ * Plane A is tile 0 (transparent) except where text is drawn, so the 32X
+ * video shows everywhere else (the 32X priority bit is 0: the Mega Drive
+ * layer is in front where it is not transparent). The SH-2s never draw text;
+ * they ask for it (CMD_OSD, CMD_LIBRARY, CMD_MESSAGE) and the 68000 redraws.
  */
 #include "md.h"
 #include "osd_tiles.h"
@@ -15,7 +13,7 @@ extern const uint8_t osd_tiles[], osd_tiles_end[];
 extern const uint16_t osd_palette[];
 
 #define PLANE_A     0xC000
-#define PLANE_B     0xE000
+#define PLANE_B     0xE000          /* the controls panel's background */
 #define COLS        40
 #define ROWS        28
 
@@ -49,22 +47,13 @@ void osd_clear(void)
 {
     vram_addr(PLANE_A);
     for (int i = 0; i < 64 * ROWS; i++) VDP_DATA = 0;
-    vram_addr(PLANE_B);
-    for (int i = 0; i < 64 * ROWS; i++) VDP_DATA = 0;
-}
-
-/* tile across columns c0 .. c1-1 of a row of a plane */
-static void fill(uint16_t plane, int row, int c0, int c1, uint16_t tile)
-{
-    vram_addr((uint16_t)(plane + (row * 64 + c0) * 2));
-    for (int c = c0; c < c1; c++) VDP_DATA = tile;
 }
 
 static void clear_rows(int r0, int r1)
 {
     for (int r = r0; r < r1; r++) {
-        fill(PLANE_A, r, 0, 64, 0);
-        fill(PLANE_B, r, 0, 64, 0);
+        vram_addr((uint16_t)(PLANE_A + r * 128));
+        for (int c = 0; c < 64; c++) VDP_DATA = 0;
     }
 }
 
@@ -80,11 +69,10 @@ void osd_text(int col, int row, const char *s, int high)
     }
 }
 
-/* a panel row: the panel behind, no text in front */
-static void panel_row(int row)
+static void fill_row(int row, int tile)
 {
-    fill(PLANE_B, row, 0, COLS, 0x8000 | T_PANEL);
-    fill(PLANE_A, row, 0, COLS, 0);
+    vram_addr((uint16_t)(PLANE_A + row * 128));
+    for (int c = 0; c < COLS; c++) VDP_DATA = (uint16_t)(0x8000 | tile);
 }
 
 static void time_string(char *o, unsigned s)
@@ -121,12 +109,12 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
     if ((last_flags ^ flags) & (OSD_HIDE | OSD_HINTS | OSD_SCRUB))
         clear_rows(23, ROWS);
     last_flags = flags;
-    static const char *const mode_name[4] = { "FILM", "FULL", "", "" };
+    static const char *const mode_name[4] = { "FILM", "FULL", "480I", "" };
     char t[12];
     /* row 24: title and mode, on the panel */
-    panel_row(24);
-    panel_row(25);
-    panel_row(26);
+    fill_row(24, T_PANEL);
+    fill_row(25, T_PANEL);
+    fill_row(26, T_PANEL);
     if (movie >= 0 && movie < movie_count) {
         char name[29];
         int i = 0;
@@ -138,7 +126,7 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
     /* row 25: icon, time, bar, duration */
     static const uint8_t icons[6] = { 0, T_PLAY, T_PAUSE, T_FF, T_REW, T_STOP };
     int ic = flags & OSD_ICON;
-    put(1, BAR_ROW, ic && ic < 6 ? icons[ic] : 0);
+    put(1, BAR_ROW, ic && ic < 6 ? icons[ic] : T_PANEL);
     time_string(t, pos);
     osd_text(2, BAR_ROW, t, 0);
     int fill = dur ? (int)((uint32_t)pos * (BAR_LEN * 8) / dur) : 0;
@@ -163,7 +151,7 @@ void osd_draw(uint16_t flags, uint16_t pos, uint16_t dur, int movie)
     } else if (flags & OSD_SCRUB) {
         osd_text(2, 26, "LEFT/RIGHT SEEK  A GO  B CANCEL", 0);
     } else if (flags & OSD_HINTS) {
-        osd_text(1, 26, "START PAUSE  <> SCAN  DOWN SEEK", 0);
+        osd_text(1, 26, "START PAUSE <> SCAN DOWN SEEK C MODE", 0);
     }
 }
 
@@ -200,8 +188,8 @@ void osd_library(int first, int cursor, uint16_t dur, int mode)
         time_string(t, dur);
         osd_text(31, 26, t, 0);
     }
-    static const char *const modes[2] = { "C MODE: FILM", "C MODE: FULL" };
-    osd_text(12, 26, modes[mode == 1], 0);
+    static const char *const modes[3] = { "C MODE: FILM", "C MODE: FULL", "C MODE: 480I" };
+    osd_text(12, 26, modes[mode < 3 ? mode : 0], 0);
 }
 
 void osd_message(int msg, int value)
@@ -220,6 +208,13 @@ void osd_message(int msg, int value)
     }
 }
 
+/* tile across columns c0 .. c1-1 of a row of a plane */
+static void fill(uint16_t plane, int row, int c0, int c1, uint16_t tile)
+{
+    vram_addr((uint16_t)(plane + (row * 64 + c0) * 2));
+    for (int c = c0; c < c1; c++) VDP_DATA = tile;
+}
+
 /* a heading: words with single spaces (a control's line has a gap) */
 static int is_heading(const char *s)
 {
@@ -229,7 +224,9 @@ static int is_heading(const char *s)
     return 1;
 }
 
-/* The controls, on a panel over the library (MODE, or B for a 3-button pad) */
+/* The controls, on a panel over the home screen (MODE, or B for a 3-button
+ * pad). Text on plane A, the panel behind it on plane B (the font's
+ * background is transparent). */
 void osd_help(int show)
 {
     static const char *const lines[] = {
@@ -253,17 +250,14 @@ void osd_help(int show)
         "",
         "PRESS ANY BUTTON TO CLOSE",
     };
-    /* text on rows 3 .. 22, the panel on rows 2 .. 23 (over the library
-     * cursor's frame on lines 22-23, clear of the time bar from row 24) */
+    /* text from row 3, the panel from row 2 (over the cursor's frame) */
     const int top = 3, n = (int)(sizeof lines / sizeof lines[0]);
-    if (!show) {
-        clear_rows(top - 1, top + n + 1);
-        return;
-    }
     for (int r = top - 1; r < top + n + 1; r++) {
-        fill(PLANE_B, r, 2, 38, 0x8000 | T_PANEL);
-        fill(PLANE_A, r, 2, 38, 0);
+        fill(PLANE_B, r, 0, 64, 0);
+        if (show) fill(PLANE_B, r, 2, 38, 0x8000 | T_PANEL);
+        fill(PLANE_A, r, 0, 64, 0);
     }
+    if (!show) return;
     for (int i = 0; i < n; i++)
         osd_text(4, top + i, lines[i], is_heading(lines[i]));
 }

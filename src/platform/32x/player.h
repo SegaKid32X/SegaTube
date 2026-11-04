@@ -8,8 +8,8 @@
 #define PLAY_END    1   /* the movie ended */
 #define PLAY_ERROR  2
 
-/* Play movie m in profile kind (KIND_FILM/FULL, falls back to the other if
- * the movie lacks it). */
+/* Play movie m in profile kind (KIND_FILM/FULL/I480, falls back to another
+ * the movie has). */
 int  play_movie(int m, int kind);
 void library_run(void);
 

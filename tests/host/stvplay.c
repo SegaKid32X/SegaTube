@@ -28,7 +28,7 @@ static void fail(const char *m)
 }
 
 typedef struct {
-    int version, depth, interlaced, w, h, x, y;
+    int depth, interlaced, w, h, x, y;
     uint32_t fps_num, fps_den, rate, frames, chunks, index, data, lead;
 } hdr;
 
@@ -85,7 +85,6 @@ int main(int argc, char **argv)
     fclose(f);
     if (file_n < STV_FILE_HEADER || stv_rd32(file) != STV_MAGIC) fail("not an STV file");
     const uint8_t *h = file;
-    H.version = stv_rd16(h + 4);
     H.depth = stv_rd16(h + 8);
     H.interlaced = stv_rd16(h + 10);
     H.w = stv_rd16(h + 12); H.h = stv_rd16(h + 14);
@@ -166,7 +165,7 @@ int main(int argc, char **argv)
                     q += 512;
                 }
                 int buf = H.interlaced ? k : (int)(frame & 1);
-                stv_target t = { fb[buf], pitch, H.w / 4, H.h / 4, H.depth, H.version };
+                stv_target t = { fb[buf], pitch, H.w / 4, H.h / 4, H.depth };
                 for (int j = 0; j < parts; j++) {
                     uint32_t po = stv_rd32(q + 4 * j);
                     int e = stv_decode_part(p + po, (uint32_t)psize - po, &t);

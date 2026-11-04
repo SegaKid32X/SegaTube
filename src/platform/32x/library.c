@@ -86,7 +86,7 @@ static void load_page(int first)
     }
 }
 
-/* The controls pop-up (MODE, or B for a 3-button pad) until a button is pressed */
+/* The controls panel (MODE, or B for a 3-button pad) until a button is pressed */
 static void help(void)
 {
     md_cmd(CMD_HELP, 1, 0, 0);
