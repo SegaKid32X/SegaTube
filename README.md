@@ -39,7 +39,7 @@ or while watching; with a 3-button pad, press **B** in the library.
 
 The 32X cannot decode MP4 itself (two 23 MHz CPUs), so movies are converted once
 on a PC or Mac with **SegaTube Converter**: download it from the repository's
-Actions tab (the latest `converter` run, artifacts) or Releases, open it, add
+**Releases** (the "latest" release, which also has the player, `segatube.32x`), open it, add
 videos, choose the SD card and press Convert. Dropping videos onto the app works
 too. (macOS: the app is not signed; right-click it and choose Open the first time.)
 

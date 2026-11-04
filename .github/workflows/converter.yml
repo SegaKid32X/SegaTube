@@ -1,16 +1,37 @@
 # Builds SegaTube Converter for Windows and macOS (and Linux): the stvenc
 # encoder, ffmpeg (from imageio-ffmpeg) and the converter in one app.
-# Artifacts on every push; a release when a tag v* is pushed.
+# Every push to main replaces the "latest" release: the player ROM
+# (release/segatube.32x) and each converter as its build finishes.
 name: converter
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
+  # a fresh "latest" release at this commit, with the player ROM
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace the latest release
+        run: |
+          gh release delete latest --cleanup-tag -y || true
+          gh release create latest release/segatube.32x \
+            --target "$GITHUB_SHA" --latest \
+            --title "SegaTube (latest)" \
+            --notes "The player ROM (segatube.32x) and SegaTube Converter for Windows (.exe), Mac (-mac.zip) and Linux (.tar.gz). The converters appear here as their builds finish. Mac: unzip, then right-click the app and choose Open the first time."
+
   build:
+    needs: release
+    if: always()
     strategy:
       fail-fast: false
       matrix:
@@ -73,8 +94,8 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: out/*
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: out/*
+      - name: Add to the latest release
+        if: github.ref == 'refs/heads/main' && needs.release.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest out/* --clobber
