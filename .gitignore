@@ -1,0 +1,14 @@
+obj/
+obj-*/
+rom/
+tests/out/
+tests/emu/*.so
+tests/emu/*.bin
+tests/harness
+converter/dist/
+converter/build/
+__pycache__/
+*.pyc
+*.STV
+*.ST[0-9]
+*.STI
