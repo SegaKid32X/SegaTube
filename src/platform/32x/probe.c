@@ -363,7 +363,9 @@ void probe_run(void)
         vticks = 0;
         puts_at(3, 1, "EVERDRIVE I/O REGISTERS:", 0);
         md_cmd(CMD_EDDIAG, 4, 0, 0);
-        row = 9;
+        puts_at(9, 1, "WITHOUT READING (NEEDS /PROBE.BIN):", 0);
+        md_cmd(CMD_EDBLIND, 10, 0, 0);
+        row = 14;
         int r = cmd_timed(CMD_SD_INIT, 0, 0, 0);
         if (r == 0xFE) line(row,  "EVERDRIVE", "NOT FOUND", 0);
         else if (r == 0xFF) line(row,  "EVERDRIVE", "SD CARD ERROR", 0);

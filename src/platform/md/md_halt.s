@@ -45,3 +45,30 @@ ed_halt_code:
         rts
         .align  2
 ed_halt_code_end:
+
+| void ed_blind_code(int frames)
+| Start an EverDrive transfer without reading its status (for when its
+| registers cannot be read): post STATUS_CMD_OK, run, then wait the given
+| number of vblanks (watching the VDP, which is not on the cartridge bus).
+        .global ed_blind_code, ed_blind_code_end
+        .align  2
+ed_blind_code:
+        move.l  4(sp),d1                | frames
+        move.w  sr,-(sp)
+        move.w  #0x2700,sr
+        move.w  #2,0xA130D4             | SYSSTAT = STATUS_CMD_OK
+        move.b  #0,0xA130D1             | FIFODATA = 0: run
+        lea     0xC00004,a0
+        subq.l  #1,d1
+        bmi.b   3f
+1:      move.w  (a0),d0                 | wait for the end of vblank
+        btst    #3,d0
+        bne.b   1b
+2:      move.w  (a0),d0                 | then for the next one
+        btst    #3,d0
+        beq.b   2b
+        dbra    d1,1b
+3:      move.w  (sp)+,sr
+        rts
+        .align  2
+ed_blind_code_end:

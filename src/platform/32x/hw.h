@@ -65,6 +65,7 @@
 #define CMD_TITLE   9
 #define CMD_PUTS    10
 #define CMD_EDDIAG  11
+#define CMD_EDBLIND 12
 
 #define KIND_INFO   0
 #define KIND_FILM   1

@@ -64,6 +64,7 @@
 #define CMD_TITLE   9   /* P1 movie whose name the OSD shows */
 #define CMD_PUTS    10  /* P1 row << 8 | col, P2 two characters, P3 1: highlighted */
 #define CMD_EDDIAG  11  /* P1 text row: the EverDrive's registers on screen -> 1 if it answered */
+#define CMD_EDBLIND 12  /* P1 text row: a transfer without status reads (PROBE.BIN) -> 1 if it worked */
 #define CMD_CRASH   15
 
 #define KIND_INFO   0
@@ -127,6 +128,7 @@ int  ed_close(void);
 int  ed_read_to_cart(uint32_t offset, uint32_t cart_addr, uint32_t len);   /* 0 or error */
 void ed_init_halt(void);
 int  ed_diag(int row);
+int  ed_blind_test(int row);
 
 /* md_vfs.c: movies built into the ROM */
 int  vfs_list_movies(void);                    /* count, 0 if none */

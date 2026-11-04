@@ -211,6 +211,91 @@ int ed_diag(int row)
     return !e1 && b[0] == 0xA5;
 }
 
+/* Hardware test: a transfer without reading anything back. Asks the
+ * EverDrive to read /PROBE.BIN (a copy of this ROM the user put on the SD
+ * card) at some offset into cartridge memory at 0x300000, then compares it
+ * with the ROM itself. Shows the result on text rows row..row+2. */
+extern const uint16_t ed_blind_code[], ed_blind_code_end[];
+static uint16_t blind_ram[48];
+typedef void (*blind_fn)(int frames);
+
+#define CART_LO     ((const volatile uint8_t *)0x880000)    /* cartridge 0 .. 512 KiB */
+#define BANK_WIN    ((const volatile uint8_t *)0x900000)
+
+static int compare_blind(uint32_t off, uint32_t len)
+{
+    MARS16(0x04) = 3;                   /* 0x900000 = cartridge 0x300000 */
+    int same = 0;
+    for (uint32_t i = 0; i < len; i++)
+        if (BANK_WIN[i] == CART_LO[off + i]) same++;
+    MARS16(0x04) = 0;
+    return same;
+}
+
+int ed_blind_test(int row)
+{
+    char t[40], *p;
+    int n = (int)(ed_blind_code_end - ed_blind_code);
+    for (int i = 0; i < n && i < 48; i++) blind_ram[i] = ed_blind_code[i];
+    blind_fn wait_run = (blind_fn)(void *)blind_ram;
+    /* the MARS id the 32X shows at A130EC: do reads here work at all? */
+    volatile uint16_t *id = (volatile uint16_t *)0xA130EC;
+    p = t;
+    hex_string(p, id[0], 4); p += 4; *p++ = ' ';
+    hex_string(p, id[1], 4); p += 4; *p = 0;
+    osd_text(1, row, "A130EC (MARS):", 0);
+    osd_text(16, row, t, id[0] == 0x4D41);
+    /* a different offset each run, so old data cannot pass */
+    uint32_t off = 0x1000 + (uint32_t)(vblanks & 0x3F) * 0x1000;
+    uint32_t len = 0x1000;
+    cmd_tx(CMD_F_FOPN);
+    fifo_wr8(FA_READ);
+    tx_string("/PROBE.BIN");
+    for (int i = 0; i < 10; i++) vdp_wait_vblank();
+    cmd_tx(CMD_F_FPTR);
+    fifo_wr32(off);
+    for (int i = 0; i < 3; i++) vdp_wait_vblank();
+    cmd_tx(CMD_F_FRD_MEM);
+    fifo_wr32(CART_SHARED);
+    fifo_wr32(len);
+    wait_run(30);                       /* half a second for 4 KiB */
+    int same = compare_blind(off, len);
+    p = t;
+    hex_string(p, (uint32_t)same, 4);
+    p += 4;
+    *p++ = '/';
+    hex_string(p, len, 4);
+    osd_text(1, row + 1, "BLIND READ:", 0);
+    osd_text(16, row + 1, same == (int)len ? "WORKS" : same > (int)len / 2 ? "PARTLY" : "NO DATA", same == (int)len);
+    osd_text(25, row + 1, t, 0);
+    if (same != (int)len) return 0;
+    /* how fast: 32 KiB with shorter and shorter waits */
+    int best = 0;
+    for (int frames = 8; frames >= 1; frames /= 2) {
+        off += 0x8000;
+        cmd_tx(CMD_F_FPTR);
+        fifo_wr32(off);
+        for (int i = 0; i < 2; i++) vdp_wait_vblank();
+        cmd_tx(CMD_F_FRD_MEM);
+        fifo_wr32(CART_SHARED);
+        fifo_wr32(0x8000);
+        wait_run(frames);
+        if (compare_blind(off, 0x8000) == 0x8000) best = frames;
+        else break;
+    }
+    p = t;
+    p = (char *)"32K IN ";
+    char u[24], *q = u;
+    while (*p) *q++ = *p++;
+    *q++ = (char)('0' + best);
+    const char *f = " FRAMES OR LESS";
+    while (*f) *q++ = *f++;
+    *q = 0;
+    osd_text(1, row + 2, "BLIND SPEED:", 0);
+    osd_text(16, row + 2, best ? u : "OVER 8 FRAMES", best > 0);
+    return 1;
+}
+
 /* The folders in /MOVIES, sorted. */
 int ed_list_movies(void)
 {
