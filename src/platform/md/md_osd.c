@@ -37,7 +37,7 @@ void osd_init(void)
     int words = (int)(osd_tiles_end - osd_tiles) / 2;
     for (int i = 0; i < words; i++) VDP_DATA = t[i];
     VDP_CTRL32 = 0xC0000000u;
-    for (int i = 0; i < 16; i++) VDP_DATA = osd_palette[i];
+    for (int i = 0; i < 32; i++) VDP_DATA = osd_palette[i];     /* lines 0 and 1 */
 }
 
 void osd_clear(void)
@@ -62,7 +62,7 @@ void osd_text(int col, int row, const char *s, int high)
         int ch = (uint8_t)*s;
         if (ch >= 'a' && ch <= 'z') ch -= 32;
         if (ch < 32 || ch >= 96) ch = ' ';
-        VDP_DATA = (uint16_t)(0x8000 | ((high ? T_HIGH : T_TEXT) + ch - 32));
+        VDP_DATA = (uint16_t)(0x8000 | (high ? PAL_HIGH : 0) | (T_TEXT + ch - 32));
     }
 }
 

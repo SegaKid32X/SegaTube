@@ -16,6 +16,10 @@ int  movie_count;
 volatile uint16_t vblanks;
 
 static uint16_t latched, last_pad, last_ack;
+#ifdef PAD_TEST
+/* hardware test only: makes the 68000 program bigger (does size matter?) */
+const uint8_t pad_test[3800] = { 1, 2, 3 };
+#endif
 static int pad6;
 static uint16_t flags;
 
@@ -262,6 +266,9 @@ void md_main(int boot_err)
             /* test telemetry (tests/harness.c reads work RAM 0xFFFF00) */
             volatile uint16_t *t = (volatile uint16_t *)0xFFFF00;
             t[0] = 0x5354;              /* "ST" */
+#ifdef PAD_TEST
+            t[8] = pad_test[vblanks & 0x3FF];
+#endif
             t[1] = COMM16(C_CMD);
             t[2] = COMM16(C_P1);
             t[3] = COMM16(C_P2);
