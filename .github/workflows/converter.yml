@@ -18,7 +18,7 @@ jobs:
           - os: windows-latest
             exe: .exe
             name: SegaTubeConverter-windows
-          - os: macos-latest
+          - os: macos-14                # (macos-latest's queue can be long)
             exe: ""
             name: SegaTubeConverter-macos
           - os: ubuntu-latest
