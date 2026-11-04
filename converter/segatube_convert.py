@@ -314,7 +314,7 @@ def run_gui(prefill: list[Path] | None = None) -> None:
     files: list[Path] = []
     dest = tk.StringVar()
     q = tk.DoubleVar(value=6)
-    mode_vars = {m: tk.BooleanVar(value=True) for m in PROFILES}
+    mode_vars = {m: tk.BooleanVar(value=m != "i480") for m in PROFILES}   # (480i: on hold)
 
     frm = ttk.Frame(root, padding=12)
     frm.grid(sticky="nsew")
@@ -341,7 +341,7 @@ def run_gui(prefill: list[Path] | None = None) -> None:
     ttk.Button(frm, text="Choose...", command=choose_dest).grid(row=3, column=2)
     mf = ttk.Frame(frm)
     mf.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
-    for m, label in (("film", "Film (15-bit colour)"), ("full", "Full (256 colours)"), ("i480", "480i")):
+    for m, label in (("film", "Film (15-bit colour)"), ("full", "Full (256 colours)"), ("i480", "480i (experimental)")):
         ttk.Checkbutton(mf, text=label, variable=mode_vars[m]).pack(side="left", padx=4)
     ttk.Label(frm, text="Quality").grid(row=5, column=0, sticky="w")
     ttk.Scale(frm, from_=1, to=10, variable=q).grid(row=5, column=1, sticky="we")
@@ -387,7 +387,8 @@ def main() -> int:
     ap.add_argument("inputs", nargs="+", type=Path)
     ap.add_argument("--sd", type=Path, help="the SD card's root folder")
     ap.add_argument("--out", type=Path, help="a folder (MOVIES/ is made inside it)")
-    ap.add_argument("--modes", default="film,full,i480")
+    ap.add_argument("--modes", default="film,full",
+                    help="film,full (default); i480 is experimental: the 32X cannot draw one of its fields")
     ap.add_argument("--quality", type=float, default=6)
     ap.add_argument("--rate-cap", type=int, default=900000,
                     help="bytes per second the EverDrive can stream (default 900000)")

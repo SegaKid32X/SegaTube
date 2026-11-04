@@ -12,3 +12,4 @@ __pycache__/
 *.STV
 *.ST[0-9]
 *.STI
+edapp-test/

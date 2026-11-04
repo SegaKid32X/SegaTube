@@ -385,6 +385,22 @@ void probe_run(void)
         int row = 4;
         char t[40];
         vticks = 0;
+        /* launched as an EverDrive app (MEGA/edapp/<ext>/app.md)? The
+         * EverDrive puts the chosen file's path right after the app, i.e.
+         * at the end of this 512 KiB ROM */
+        {
+            const volatile uint8_t *pth = (const volatile uint8_t *)(uintptr_t)(CART_THROUGH + 0x80000);
+            char path[38];
+            int n = 0, ok = 1;
+            for (; n < 37 && pth[n]; n++) {
+                uint8_t c = pth[n];
+                if (c < 32 || c > 126) { ok = 0; break; }
+                path[n] = (char)(c >= 'a' && c <= 'z' ? c - 32 : c);
+            }
+            path[n] = 0;
+            if (!ok || n < 2) puts_at(2, 1, "STARTED FROM THE MENU", 0);
+            else { puts_at(2, 1, "APP FOR:", 0); puts_at(2, 10, path, 1); }
+        }
         puts_at(3, 1, "EVERDRIVE I/O REGISTERS:", 0);
         md_cmd(CMD_EDDIAG, 4, 0, 0);
 #ifndef NO_BLIND
