@@ -12,6 +12,12 @@ on:
 permissions:
   contents: write
 
+# a newer push stops the builds of an older one (so an old converter can
+# never land in the release after a newer one)
+concurrency:
+  group: converter-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # a fresh "latest" release at this commit, with the player ROM
   release:
@@ -98,4 +104,10 @@ jobs:
         if: github.ref == 'refs/heads/main' && needs.release.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload latest out/* --clobber
+        run: |
+          # only into the release made for this very commit
+          target=$(gh release view latest --json targetCommitish --jq .targetCommitish)
+          if [ "$target" != "$GITHUB_SHA" ]; then
+            echo "the release is for $target, not this commit: not uploading"; exit 0
+          fi
+          gh release upload latest out/* --clobber

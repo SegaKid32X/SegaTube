@@ -261,6 +261,11 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
         if enc.wait() != 0:
             errors.append(f"stvenc failed on {src_path.name} ({mode})")
         dec.wait()
+        out = folder / (FILE_NAMES[mode] + ".STV")
+        if out.exists():
+            with open(out, "rb") as f:
+                head = f.read(6)
+            log(f"  {FILE_NAMES[mode]}: file version {int.from_bytes(head[4:6], 'big')}")
 
     threads = [threading.Thread(target=encode, args=(m,)) for m in modes]
     for t in threads:
