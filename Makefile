@@ -45,7 +45,7 @@ MD_OBJS := $(OBJ)/md_crt.o $(OBJ)/md_halt.o $(OBJ)/osd_tiles.o \
 
 MARKERS := --title "SEGATUBE" --marker "SEGATUBE PLAYER" --marker "STVFS@"
 
-.PHONY: all tools test-rom test-rom-long check clean host-test
+.PHONY: all tools test-rom test-rom-long probe check clean host-test
 all: $(ROM)
 
 $(OBJ) $(OBJ)/sh $(OBJ)/md rom:
@@ -76,7 +76,7 @@ $(OBJ)/md.bin: $(MD_OBJS) src/platform/md/md.ld
 
 # ---- SH-2 program ----
 $(OBJ)/crt0.o: src/platform/32x/crt0.s $(OBJ)/md.bin src/platform/32x/icd_mars.bin
-	$(AS) --big $< -o $@
+	$(AS) --big -I$(OBJ) $< -o $@
 $(OBJ)/sh/%.o: src/platform/32x/%.c src/platform/32x/*.h src/codec/*.h | $(OBJ)/sh
 	$(CC) $(SHFLAGS) $< -o $@
 $(OBJ)/sh/stv_dec.o: src/codec/stv_dec.c src/codec/*.h | $(OBJ)/sh
@@ -95,12 +95,12 @@ $(ROM): $(OBJ)/$(TARGET).raw | rom
 
 # ---- the test ROM: a generated clip, every mode, built in ----
 TESTCLIP := $(OBJ)/testclip/clip.mp4
-TESTMOVIE := $(OBJ)/testsd/MOVIES/SegaTube Test
+TESTMOVIE := $(OBJ)/testsd/MOVIES/SegaTube-Test
 $(TESTCLIP): tools/make_test_clip.sh
 	sh tools/make_test_clip.sh $@
 $(TESTMOVIE)/INFO.STI: $(TESTCLIP) $(OBJ)/stvenc converter/segatube_convert.py
 	rm -rf $(OBJ)/testsd
-	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd --title "SegaTube Test" \
+	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd --title "SegaTube-Test" \
 	    --quality 4 --duration 3
 test-rom: $(OBJ)/$(TARGET).raw $(TESTMOVIE)/INFO.STI | rom
 	python3 tools/mkvfs.py $(OBJ)/$(TARGET).raw $(TESTROM) "$(TESTMOVIE)"
@@ -108,15 +108,19 @@ test-rom: $(OBJ)/$(TARGET).raw $(TESTMOVIE)/INFO.STI | rom
 	python3 tests/verify_rom.py $(TESTROM) $(OBJ)/$(TARGET).elf $(MARKERS) --min-text 2048
 
 # a longer movie, one mode, for the control tests (scan, scrub, the end)
-LONGMOVIE := $(OBJ)/testsd-long/MOVIES/Long Test
+LONGMOVIE := $(OBJ)/testsd-long/MOVIES/Long-Test
 $(LONGMOVIE)/INFO.STI: $(TESTCLIP) $(OBJ)/stvenc converter/segatube_convert.py
 	rm -rf $(OBJ)/testsd-long
-	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd-long --title "Long Test" \
+	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd-long --title "Long-Test" \
 	    --modes full --quality 3 --duration 11
 test-rom-long: $(OBJ)/$(TARGET).raw $(LONGMOVIE)/INFO.STI | rom
 	python3 tools/mkvfs.py $(OBJ)/$(TARGET).raw rom/$(TARGET)-long.32x "$(LONGMOVIE)"
 	python3 tools/romfix.py rom/$(TARGET)-long.32x --pow2 --gran 524288
 	python3 tests/verify_rom.py rom/$(TARGET)-long.32x $(OBJ)/$(TARGET).elf $(MARKERS) --min-text 2048
+
+# ---- the hardware test ROM ----
+probe:
+	$(MAKE) OBJ=obj-probe TARGET=segatube-probe EXTRA_CFLAGS=-DPROBE rom/segatube-probe.32x
 
 # ---- tests ----
 host-test: tools $(TESTMOVIE)/INFO.STI $(LONGMOVIE)/INFO.STI
@@ -130,4 +134,4 @@ check: $(ROM) test-rom test-rom-long host-test tests/harness
 	else echo "SKIP emulator tests: put picodrive_libretro.so in tests/emu (see tests/emu/README.md)"; fi
 
 clean:
-	rm -rf $(OBJ) rom tests/out tests/harness
+	rm -rf $(OBJ) obj-probe rom tests/out tests/harness

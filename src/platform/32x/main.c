@@ -15,6 +15,11 @@ int main(void)
     hw_init();
     hw_stage(0xC);                  /* running */
     audio_init(22050);
+#ifdef PROBE
+    extern void probe_run(void);
+    probe_run();
+#else
     library_run();
+#endif
     return 0;
 }

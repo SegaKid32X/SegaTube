@@ -23,7 +23,8 @@ CORE = os.path.join(HERE, "emu", "picodrive_libretro.so")
 HARNESS = os.path.join(HERE, "harness")
 SCRIPTS = os.path.join(HERE, "scripts")
 OUT = os.path.join(HERE, "out")
-ROMS = {"test": "rom/segatube-test.32x", "long": "rom/segatube-long.32x"}
+ROMS = {"test": "rom/segatube-test.32x", "long": "rom/segatube-long.32x",
+        "probe": "rom/segatube-probe.32x"}
 
 MIN_LIT = 0.08          # at least 8% of pixels not black
 MIN_COLOURS = 6

@@ -62,6 +62,7 @@
 #define CMD_MESSAGE 7   /* P1 MSG_*, P2 value */
 #define CMD_CLEAR   8   /* clear the text layer */
 #define CMD_TITLE   9   /* P1 movie whose name the OSD shows */
+#define CMD_PUTS    10  /* P1 row << 8 | col, P2 two characters, P3 1: highlighted */
 #define CMD_CRASH   15
 
 #define KIND_INFO   0

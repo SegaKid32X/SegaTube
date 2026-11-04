@@ -81,7 +81,7 @@ _start:
         .incbin "src/platform/32x/icd_mars.bin"
 
 ! 0x800: our 68000 resident program
-        .incbin "obj/md.bin"
+        .incbin "md.bin"                /* from the build directory (as -I) */
         .global __md_end
 __md_end:
 

@@ -1,0 +1,11 @@
+# rom: probe
+run 240
+shot allow_dark_p1
+run 200
+shot allow_dark_p2
+press a 6
+run 60
+shot allow_dark_p3
+press start 6
+run 60
+shot allow_dark_p4

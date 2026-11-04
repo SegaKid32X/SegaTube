@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OBJ = ROOT / "obj"
-MOVIES = [OBJ / "testsd" / "MOVIES" / "SegaTube Test", OBJ / "testsd-long" / "MOVIES" / "Long Test"]
+MOVIES = [OBJ / "testsd" / "MOVIES" / "SegaTube-Test", OBJ / "testsd-long" / "MOVIES" / "Long-Test"]
 
 
 def sh(*cmd, ok=(0,)):

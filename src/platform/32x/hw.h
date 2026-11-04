@@ -63,6 +63,7 @@
 #define CMD_MESSAGE 7
 #define CMD_CLEAR   8
 #define CMD_TITLE   9
+#define CMD_PUTS    10
 
 #define KIND_INFO   0
 #define KIND_FILM   1
