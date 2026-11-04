@@ -73,12 +73,17 @@ void audio_irq(void)
     }
 }
 
-/* Slave job: set up the PWM and its DMA, then let the interrupt run. */
+static uint32_t cycle_for(int rate)
+{
+    int clock = (MARS_VDP_MODE & VDP_MODE_PAL) ? SH2_CLOCK_PAL : SH2_CLOCK_NTSC;
+    return (uint32_t)(clock / rate) + 1;
+}
+
+/* Slave job, once: set up the PWM and its DMA, then let the interrupt run. */
 static void audio_start_job(int rate)
 {
     audio_state *s = ST;
-    int clock = (MARS_VDP_MODE & VDP_MODE_PAL) ? SH2_CLOCK_PAL : SH2_CLOCK_NTSC;
-    uint32_t cycle = (uint32_t)(clock / rate) + 1;
+    uint32_t cycle = cycle_for(rate);
     s->cycle = cycle;
     for (int i = 0; i < AUDIO_BLOCK; i++)
         silence[i] = (cycle / 2) << 16 | (cycle / 2);
@@ -100,15 +105,39 @@ static void audio_start_job(int rate)
     __asm__ volatile ("ldc %0,sr" : : "r"(sr));
 }
 
+/* Slave job: another sample rate (the DMA keeps running; the PWM and its
+ * FIFO are set up only once - redoing that while the DMA feeds it hangs). */
+static void audio_rate_job(int rate)
+{
+    audio_state *s = ST;
+    uint32_t cycle = cycle_for(rate);
+    uint32_t sr, masked;
+    __asm__ volatile ("stc sr,%0" : "=r"(sr));
+    masked = sr | 0xF0u;
+    __asm__ volatile ("ldc %0,sr" : : "r"(masked));
+    s->cycle = cycle;
+    for (int i = 0; i < AUDIO_BLOCK; i++)
+        silence[i] = (cycle / 2) << 16 | (cycle / 2);
+    MARS_PWM_CYCLE = (uint16_t)cycle;
+    __asm__ volatile ("ldc %0,sr" : : "r"(sr));
+}
+
+static int started_rate;
+
 void audio_init(int rate)
 {
     audio_state *s = ST;
+    if (started_rate) audio_reset();
     s->wpos = s->rpos = 0;
     s->paused = 1;
     s->running = 0;
     s->underruns = 0;
-    hw_slave_start(audio_start_job, rate);
+    if (!started_rate)
+        hw_slave_start(audio_start_job, rate);
+    else if (rate != started_rate)
+        hw_slave_start(audio_rate_job, rate);
     hw_slave_wait();
+    started_rate = rate;
 }
 
 int audio_cycle(void)

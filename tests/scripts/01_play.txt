@@ -1,0 +1,19 @@
+# Boot to the library, play the built-in test movie in each mode.
+run 150
+shot library
+press a 6
+run 40
+shot film_a
+run 30
+shot film_b
+press c 6
+run 70
+shot full_a
+run 30
+shot full_b
+press c 6
+run 70
+shot i480_a
+run 30
+shot i480_b
+telem

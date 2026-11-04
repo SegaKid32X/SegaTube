@@ -102,7 +102,7 @@ typedef int16_t (*input_t)(unsigned port, unsigned device, unsigned index, unsig
 /* name -> libretro id. Genesis mapping is core-dependent; tweak if needed. */
 static const struct { const char *name; unsigned id; } BTN[] = {
     {"up", ID_UP}, {"down", ID_DOWN}, {"left", ID_LEFT}, {"right", ID_RIGHT},
-    {"a", ID_A}, {"b", ID_B}, {"c", ID_Y}, {"start", ID_START},
+    {"a", ID_Y}, {"b", ID_B}, {"c", ID_A}, {"start", ID_START},   /* PicoDrive: Y=A, A=C */
     {"x", ID_L}, {"y", ID_X}, {"z", ID_R}, {"mode", 2 /*SELECT*/},   /* PicoDrive: L=X, X=Y, R=Z */
 };
 

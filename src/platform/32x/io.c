@@ -138,7 +138,9 @@ int movie_open(movie_t *m, int movie, int kind)
 {
     int r = io_open(movie, kind, 0);
     if (r) return r;
+    TRACE(0x7201);
     r = io_read(0, hdr_buf, 256);
+    TRACE(0x7202);
     if (r) return r;
     const uint8_t *h = hdr_buf;
     if (rd32(h) != STV_MAGIC) return 0xFC;

@@ -225,8 +225,10 @@ void md_main(int boot_err)
     COMM32(0x0) = 0;            /* release the master */
     osd_clear();
 
-    last_ack = COMM16(C_CMD) >> 8;
-    unsigned last_seq = (COMM16(C_CMD) >> 4) & 15;
+    /* COMM0 was 0 when we released the master; its first command is seq 1
+     * (it may already be waiting: do not read the counters back from COMM) */
+    last_ack = 0;
+    unsigned last_seq = 0;
     int was_vb = 0;
     for (;;) {
         uint16_t st = VDP_CTRL;

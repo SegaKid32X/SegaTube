@@ -1,0 +1,44 @@
+# Pause, fast forward, rewind, the scrubber, back to the library, the end.
+run 150
+press a 6
+run 90
+shot play
+press start 6
+run 30
+shot paused
+press start 6
+run 30
+press right 6
+run 40
+shot ff2
+press right 6
+run 40
+shot ff4
+press start 6
+run 40
+shot after_ff
+press left 6
+run 60
+shot rew
+press start 6
+run 40
+press down 6
+run 40
+shot scrub0
+press right 6
+run 30
+press right 6
+run 30
+shot scrub2
+press a 6
+run 60
+shot after_scrub
+press b 6
+run 60
+shot back_library
+press a 6
+run 900
+shot the_end
+run 200
+shot library_again
+telem

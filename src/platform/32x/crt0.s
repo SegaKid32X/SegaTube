@@ -13,7 +13,8 @@
 !   vector tables, master/slave entry code, then C .data
 !
 ! COMM registers: see src/platform/md/md.h. During start-up the master
-! posts its stage in COMM6 (C_P3); a crash posts CMD_CRASH in COMM0, the
+! posts its stage in COMM12 (COMM0-7 still hold the boot ROMs' M_OK/S_OK
+! handshake then); a crash posts CMD_CRASH in COMM0, the
 ! faulting PC in COMM2:COMM4 and 0xD (slave) / 0xE (master) in COMM6.
 !-----------------------------------------------------------------------
 
@@ -149,7 +150,7 @@ pri_start:
         ldc     r0,sr                   /* mask all interrupts */
         mov.l   p_comm,r8               /* r8 = 0x20004020 COMM base */
         mov     #1,r0
-        mov.w   r0,@(6,r8)             /* stage 1: entry */
+        mov.w   r0,@(12,r8)             /* stage 1: entry */
         sh2_hw_init p_frt, p_intclr
 
         mov.l   p_ccr,r1
@@ -166,7 +167,7 @@ pri_start:
         add     #4,r1
 2:
         mov     #4,r0
-        mov.w   r0,@(6,r8)             /* stage 4: bss cleared */
+        mov.w   r0,@(12,r8)             /* stage 4: bss cleared */
 
         mov.l   p_mok,r1                /* wait for the 68000 to clear M_OK */
 3:      mov.l   @r8,r0
@@ -176,7 +177,7 @@ pri_start:
         mov     #0,r0
         mov.l   r0,@(4,r8)              /* clear S_OK: release the slave */
         mov     #5,r0
-        mov.w   r0,@(6,r8)             /* stage 5: handshake done */
+        mov.w   r0,@(12,r8)             /* stage 5: handshake done */
 
         mov.l   p_adapter,r1
         mov     #0x80,r0                /* FM = 1: SH-2 owns the 32X VDP */
@@ -184,7 +185,7 @@ pri_start:
         mov     #0,r0
         mov.b   r0,@(1,r1)              /* no SH-2 interrupts */
         mov     #6,r0
-        mov.w   r0,@(6,r8)             /* stage 6: FM set */
+        mov.w   r0,@(12,r8)             /* stage 6: FM set */
 
         mov.l   p_ccr,r1
         mov     #0x11,r0                /* purge, cache on */

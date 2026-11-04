@@ -485,13 +485,14 @@ static int scan(int dir)
     return shown;
 }
 
-/* P8: BGR555 -> palette index, 12-bit (4 bits a channel) */
-static uint8_t lut4k[4096];
+/* P8: BGR555 -> palette index, 9-bit (3 bits a channel: a thumbnail needs
+ * no more, and 512 x 256 tries take a moment where 4096 x 256 took seconds) */
+static uint8_t lut512[512];
 
 static void build_lut(void)
 {
-    for (int c = 0; c < 4096; c++) {
-        int r = (c & 15) * 2 + 1, g = (c >> 4 & 15) * 2 + 1, b = (c >> 8) * 2 + 1;
+    for (int c = 0; c < 512; c++) {
+        int r = (c & 7) * 4 + 2, g = (c >> 3 & 7) * 4 + 2, b = (c >> 6) * 4 + 2;
         int best = 1 << 30, bi = 0;
         for (int i = 0; i < 256; i++) {
             int p = palette[i];
@@ -499,7 +500,7 @@ static void build_lut(void)
             int d = 3 * dr * dr + 4 * dg * dg + 2 * db * db;
             if (d < best) { best = d; bi = i; }
         }
-        lut4k[c] = (uint8_t)bi;
+        lut512[c] = (uint8_t)bi;
     }
 }
 
@@ -529,8 +530,8 @@ static void draw_thumb(void)
             if (mv.depth == 2) {
                 ((uint16_t *)(void *)row)[mv.pic_x + x + i] = (uint16_t)c;
             } else {
-                unsigned k = (c >> 1 & 15) | (c >> 6 & 15) << 4 | (c >> 11 & 15) << 8;
-                row[mv.pic_x + x + i] = lut4k[k];
+                unsigned k = (c >> 2 & 7) | (c >> 7 & 7) << 3 | (c >> 12 & 7) << 6;
+                row[mv.pic_x + x + i] = lut512[k];
             }
         }
     }
@@ -679,7 +680,8 @@ static int play_progressive(int c)
                 return ACT_ERROR;
             } else if (stream_eof()) {
                 /* wait for the audio to run out, then the end */
-                if (audio_queued() == 0 || paused) return paused ? ACT_NONE : ACT_END;
+                /* (less than a DMA block left never plays out) */
+                if (audio_queued() < 256 || paused) return paused ? ACT_NONE : ACT_END;
             }
         }
         if (have_next && !paused) {
@@ -763,7 +765,7 @@ static int play_interlaced(int c)
         if (!have) {
             if (!peek_record(&r)) {
                 if (bad_stream || stream_error()) return ACT_ERROR;
-                if (stream_eof() && (audio_queued() == 0)) return ACT_END;
+                if (stream_eof() && audio_queued() < 256) return ACT_END;
                 hw_request_show(buf_u);
                 continue;
             }
@@ -819,7 +821,9 @@ int play_movie(int m, int kind)
     uint32_t resume_ms = 0;
     for (;;) {
         ui_cmd(CMD_MESSAGE, MSG_LOADING, 0, 0);
+        TRACE(0x7001);
         int e = movie_open(&mv, m, kind);
+        TRACE(0x7002);
         if (e) {
             ui_cmd(CMD_MESSAGE, MSG_ERROR, (uint16_t)e, 0);
             for (int i = 0; i < 120; i++) hw_wait_vblank();
@@ -827,8 +831,17 @@ int play_movie(int m, int kind)
             return PLAY_ERROR;
         }
         if (mv.rate) audio_init((int)mv.rate);
+        TRACE(0x7003);
+#ifdef DEBUG_STEPS
+        ui_cmd(CMD_MESSAGE, MSG_ERROR, 0x102, 0);
+        for (int i = 0; i < 30; i++) hw_wait_vblank();
+#endif
         ui_cmd(CMD_MESSAGE, MSG_NONE, 0, 0);
         set_video();
+#ifdef DEBUG_STEPS
+        ui_cmd(CMD_MESSAGE, MSG_ERROR, 0x103, 0);
+        for (int i = 0; i < 30; i++) hw_wait_vblank();
+#endif
         field_swap = 0;
         osd_flags_shown = 0xFFFF;
         osd_timer = 150;

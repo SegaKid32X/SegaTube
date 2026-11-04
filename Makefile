@@ -45,7 +45,7 @@ MD_OBJS := $(OBJ)/md_crt.o $(OBJ)/md_halt.o $(OBJ)/osd_tiles.o \
 
 MARKERS := --title "SEGATUBE" --marker "SEGATUBE PLAYER" --marker "STVFS@"
 
-.PHONY: all tools test-rom check clean host-test
+.PHONY: all tools test-rom test-rom-long check clean host-test
 all: $(ROM)
 
 $(OBJ) $(OBJ)/sh $(OBJ)/md rom:
@@ -106,6 +106,17 @@ test-rom: $(OBJ)/$(TARGET).raw $(TESTMOVIE)/INFO.STI | rom
 	python3 tools/mkvfs.py $(OBJ)/$(TARGET).raw $(TESTROM) "$(TESTMOVIE)"
 	python3 tools/romfix.py $(TESTROM) --pow2 --gran 524288
 	python3 tests/verify_rom.py $(TESTROM) $(OBJ)/$(TARGET).elf $(MARKERS) --min-text 2048
+
+# a longer movie, one mode, for the control tests (scan, scrub, the end)
+LONGMOVIE := $(OBJ)/testsd-long/MOVIES/Long Test
+$(LONGMOVIE)/INFO.STI: $(TESTCLIP) $(OBJ)/stvenc converter/segatube_convert.py
+	rm -rf $(OBJ)/testsd-long
+	python3 converter/segatube_convert.py $(TESTCLIP) --out $(OBJ)/testsd-long --title "Long Test" \
+	    --modes full --quality 3 --duration 11
+test-rom-long: $(OBJ)/$(TARGET).raw $(LONGMOVIE)/INFO.STI | rom
+	python3 tools/mkvfs.py $(OBJ)/$(TARGET).raw rom/$(TARGET)-long.32x "$(LONGMOVIE)"
+	python3 tools/romfix.py rom/$(TARGET)-long.32x --pow2 --gran 524288
+	python3 tests/verify_rom.py rom/$(TARGET)-long.32x $(OBJ)/$(TARGET).elf $(MARKERS) --min-text 2048
 
 # ---- tests ----
 host-test: tools $(TESTMOVIE)/INFO.STI

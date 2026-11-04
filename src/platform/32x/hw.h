@@ -146,6 +146,10 @@ void dma0_start(void *dst, const void *src, uint32_t len);  /* len multiple of 4
 int  dma0_busy(void);
 void dma0_wait(void);
 
+/* ---- tracing: a step number the 68000 copies into the test telemetry
+ * (work RAM 0xFFFF06) every frame; C_P2 is only read with a new command ---- */
+#define TRACE(n) (MARS_COMM(C_P2) = (uint16_t)(n))
+
 /* ---- timing ---- */
 void hw_stage(int stage);
 

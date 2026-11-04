@@ -176,24 +176,25 @@ def to555_be(rgb: bytes) -> bytes:
 def grab_frames(ffmpeg: str, src: Source, every: float, w: int, h: int,
                 start: float, duration: float) -> list[bytes]:
     """One letterboxed w x h RGB picture every `every` seconds."""
-    vf = (f"fps=1/{every},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=area,"
+    vf = (f"select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{every})',"
+          f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=area,"
           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,format=rgb24")
     cmd = [ffmpeg, "-v", "error", "-ss", str(start), "-t", str(duration), "-i", str(src.path),
-           "-vf", vf, "-f", "rawvideo", "-"]
+           "-vf", vf, "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
     data = subprocess.run(cmd, capture_output=True, check=True).stdout
     n = w * h * 3
     return [data[i:i + n] for i in range(0, len(data) - n + 1, n)]
 
 
 def write_info(path: Path, title: str, modes: list[str], duration: float,
-               thumbs: list[bytes], poster: bytes) -> None:
+               thumbs: list[bytes], every: int, poster: bytes) -> None:
     profiles = 0
     for m in modes:
         profiles |= 1 << PROFILES[m]
     thumb_off = INFO_HEADER
     poster_off = thumb_off + len(thumbs) * THUMB_W * THUMB_H * 2
     hdr = struct.pack(">IHHIIIII", 0x53544931, 1, profiles, int(duration * 1000),
-                      len(thumbs), THUMB_EVERY_S * 1000, thumb_off, poster_off)
+                      len(thumbs), every * 1000, thumb_off, poster_off)
     hdr += b"\0" * 36
     hdr += title.encode("ascii", "replace")[:63].ljust(64, b"\0")
     hdr = hdr.ljust(INFO_HEADER, b"\0")
@@ -268,10 +269,11 @@ def convert(src_path: Path, dest_root: Path, modes: list[str], quality: float,
         dec.wait()
 
     log("  thumbnails")
-    thumbs = grab_frames(ffmpeg, src, THUMB_EVERY_S, THUMB_W, THUMB_H, start, length)
+    every = max(1, min(THUMB_EVERY_S, round(length / 200)))
+    thumbs = grab_frames(ffmpeg, src, every, THUMB_W, THUMB_H, start, length)
     poster_at = start + min(length * 0.1, 60.0)
     poster = grab_frames(ffmpeg, src, 1000, POSTER_W, POSTER_H, poster_at, 1.0)
-    write_info(folder / "INFO.STI", title, modes, length, thumbs,
+    write_info(folder / "INFO.STI", title, modes, length, thumbs, every,
                poster[0] if poster else b"\0" * POSTER_W * POSTER_H * 3)
     if audio.exists():
         audio.unlink()
