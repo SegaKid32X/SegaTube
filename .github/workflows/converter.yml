@@ -59,12 +59,22 @@ jobs:
             --add-binary "dist-bin/stvenc${{ matrix.exe }}${sep}." \
             --add-binary "dist-bin/ffmpeg${{ matrix.exe }}${sep}." \
             converter/segatube_convert.py
+      - name: Package
+        # (artifact zips lose file permissions: ship archives that keep them)
+        run: |
+          mkdir -p out
+          case "${{ runner.os }}" in
+            Windows) cp dist/SegaTubeConverter.exe out/ ;;
+            macOS)   ditto -c -k --keepParent dist/SegaTubeConverter.app out/SegaTubeConverter-mac.zip ;;
+            Linux)   tar -C dist -czf out/SegaTubeConverter-linux.tar.gz SegaTubeConverter ;;
+          esac
+          ls -la out
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: dist/*
+          path: out/*
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: out/*
