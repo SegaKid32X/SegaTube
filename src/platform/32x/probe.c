@@ -387,6 +387,7 @@ void probe_run(void)
         vticks = 0;
         puts_at(3, 1, "EVERDRIVE I/O REGISTERS:", 0);
         md_cmd(CMD_EDDIAG, 4, 0, 0);
+#ifndef NO_BLIND
         puts_at(9, 1, "WITHOUT READING (NEEDS /PROBE.BIN):", 0);
         puts_at(10, 1, "A: TRY IT   B: SKIP", 1);
         for (;;) {
@@ -395,6 +396,7 @@ void probe_run(void)
             if (pad_pressed & PAD_A) { puts_at(10, 1, "                    ", 0); md_cmd(CMD_EDBLIND, 10, 0, 0); break; }
             if (pad_pressed & PAD_B) { puts_at(10, 1, "SKIPPED             ", 0); break; }
         }
+#endif
         row = 14;
         int r = cmd_timed(CMD_SD_INIT, 0, 0, 0);
         if (r == 0xFE) line(row,  "EVERDRIVE", "NOT FOUND", 0);

@@ -28,7 +28,7 @@ MDCC   := $(MDPREFIX)gcc
 MDOBJC := $(MDPREFIX)objcopy
 HOSTCC ?= cc
 
-MDCFLAGS := -m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -Wall -Wextra \
+MDCFLAGS = -m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -Wall -Wextra $(EXTRA_CFLAGS) \
             -Wno-unused-parameter -I$(OBJ) -Isrc/platform/include
 # One optimisation level for all SH-2 code (GCC on the SH-2 mixes -O levels badly).
 SHFLAGS := -c -std=gnu11 -m2 -mb -O2 -fomit-frame-pointer -ffreestanding \
@@ -45,7 +45,7 @@ MD_OBJS := $(OBJ)/md_crt.o $(OBJ)/md_halt.o $(OBJ)/osd_tiles.o \
 
 MARKERS := --title "SEGATUBE" --marker "SEGATUBE PLAYER" --marker "STVFS@"
 
-.PHONY: all tools test-rom test-rom-long probe check clean host-test
+.PHONY: all tools test-rom test-rom-long probe probe-noblind check clean host-test
 all: $(ROM)
 
 $(OBJ) $(OBJ)/sh $(OBJ)/md rom:
@@ -121,6 +121,9 @@ test-rom-long: $(OBJ)/$(TARGET).raw $(LONGMOVIE)/INFO.STI | rom
 # ---- the hardware test ROM ----
 probe:
 	$(MAKE) OBJ=obj-probe TARGET=segatube-probe EXTRA_CFLAGS=-DPROBE rom/segatube-probe.32x
+# the probe without the blind EverDrive transfer (it does not start on one console)
+probe-noblind:
+	$(MAKE) OBJ=obj-probe-nb TARGET=segatube-probe-v5 EXTRA_CFLAGS="-DPROBE -DNO_BLIND" rom/segatube-probe-v5.32x
 
 # ---- tests ----
 host-test: tools $(TESTMOVIE)/INFO.STI $(LONGMOVIE)/INFO.STI
@@ -134,4 +137,4 @@ check: $(ROM) test-rom test-rom-long host-test tests/harness
 	else echo "SKIP emulator tests: put picodrive_libretro.so in tests/emu (see tests/emu/README.md)"; fi
 
 clean:
-	rm -rf $(OBJ) obj-probe rom tests/out tests/harness
+	rm -rf $(OBJ) obj-probe obj-probe-nb rom tests/out tests/harness

@@ -211,6 +211,7 @@ int ed_diag(int row)
     return !e1 && b[0] == 0xA5;
 }
 
+#ifndef NO_BLIND
 /* Hardware test: a transfer without reading anything back. Asks the
  * EverDrive to read /PROBE.BIN (a copy of this ROM the user put on the SD
  * card) at some offset into cartridge memory at 0x300000, then compares it
@@ -306,6 +307,8 @@ int ed_blind_test(int row)
     osd_text(16, row + 2, best ? u : "OVER 8 FRAMES", best > 0);
     return 1;
 }
+
+#endif
 
 /* The folders in /MOVIES, sorted. */
 int ed_list_movies(void)
