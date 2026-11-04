@@ -413,7 +413,7 @@ void probe_run(void)
             if (pad_pressed & PAD_B) { puts_at(10, 1, "SKIPPED             ", 0); break; }
         }
 #endif
-        row = 14;
+        row = 15;
         int r = cmd_timed(CMD_SD_INIT, 0, 0, 0);
         if (r == 0xFE) line(row,  "EVERDRIVE", "NOT FOUND", 0);
         else if (r == 0xFF) line(row,  "EVERDRIVE", "SD CARD ERROR", 0);

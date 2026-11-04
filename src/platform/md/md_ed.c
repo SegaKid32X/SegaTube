@@ -223,14 +223,25 @@ typedef void (*blind_fn)(int frames);
 #define CART_LO     ((const volatile uint8_t *)0x880000)    /* cartridge 0 .. 512 KiB */
 #define BANK_WIN    ((const volatile uint8_t *)0x900000)
 
+/* The transfer lands in the unused (zero) end of this 512 KiB ROM, which
+ * the 68000 can read at 0x880000+: beyond the ROM, the EverDrive's 32X
+ * mode shows nothing (the first try read 0 matching bytes there). */
+#define BLIND_DST   0x060000u
+
 static int compare_blind(uint32_t off, uint32_t len)
 {
-    MARS16(0x04) = 3;                   /* 0x900000 = cartridge 0x300000 */
     int same = 0;
     for (uint32_t i = 0; i < len; i++)
-        if (BANK_WIN[i] == CART_LO[off + i]) same++;
-    MARS16(0x04) = 0;
+        if (CART_LO[BLIND_DST + i] == CART_LO[off + i]) same++;
     return same;
+}
+
+static void show_bytes(int col, int row, uint32_t at)
+{
+    char t[12];
+    hex_string(t, (uint32_t)CART_LO[at] << 24 | (uint32_t)CART_LO[at + 1] << 16 |
+                  (uint32_t)CART_LO[at + 2] << 8 | CART_LO[at + 3], 8);
+    osd_text(col, row, t, 0);
 }
 
 int ed_blind_test(int row)
@@ -246,8 +257,9 @@ int ed_blind_test(int row)
     hex_string(p, id[1], 4); p += 4; *p = 0;
     osd_text(1, row, "A130EC (MARS):", 0);
     osd_text(16, row, t, id[0] == 0x4D41);
-    /* a different offset each run, so old data cannot pass */
-    uint32_t off = 0x1000 + (uint32_t)(vblanks & 0x3F) * 0x1000;
+    /* a part of the ROM full of code (the 68000 program from 0x800), at a
+     * different offset each run, so neither zeros nor old data can pass */
+    uint32_t off = 0x800 + (uint32_t)(vblanks & 0x1F) * 0x100;
     uint32_t len = 0x1000;
     /* each step on screen first: if the console stops, the last one shown
      * is where */
@@ -265,10 +277,14 @@ int ed_blind_test(int row)
     for (int i = 0; i < 20; i++) vdp_wait_vblank();
     osd_text(16, row + 1, "3 READ      ", 1);
     for (int i = 0; i < 20; i++) vdp_wait_vblank();
+    osd_text(1, row + 2, "BEFORE", 0);
+    show_bytes(8, row + 2, BLIND_DST);
     cmd_tx(CMD_F_FRD_MEM);
-    fifo_wr32(CART_SHARED);
+    fifo_wr32(BLIND_DST);
     fifo_wr32(len);
     wait_run(30);                       /* half a second for 4 KiB */
+    osd_text(18, row + 2, "AFTER", 0);
+    show_bytes(24, row + 2, BLIND_DST);
     osd_text(16, row + 1, "4 COMPARE   ", 1);
     for (int i = 0; i < 20; i++) vdp_wait_vblank();
     int same = compare_blind(off, len);
@@ -284,12 +300,12 @@ int ed_blind_test(int row)
     /* how fast: 32 KiB with shorter and shorter waits */
     int best = 0;
     for (int frames = 8; frames >= 1; frames /= 2) {
-        off += 0x8000;
+        off = off == 0x800 ? 0xA00 : 0x800;    /* (alternate: old data cannot pass) */
         cmd_tx(CMD_F_FPTR);
         fifo_wr32(off);
         for (int i = 0; i < 2; i++) vdp_wait_vblank();
         cmd_tx(CMD_F_FRD_MEM);
-        fifo_wr32(CART_SHARED);
+        fifo_wr32(BLIND_DST);
         fifo_wr32(0x8000);
         wait_run(frames);
         if (compare_blind(off, 0x8000) == 0x8000) best = frames;
@@ -303,8 +319,8 @@ int ed_blind_test(int row)
     const char *f = " FRAMES OR LESS";
     while (*f) *q++ = *f++;
     *q = 0;
-    osd_text(1, row + 2, "BLIND SPEED:", 0);
-    osd_text(16, row + 2, best ? u : "OVER 8 FRAMES", best > 0);
+    osd_text(1, row + 3, "BLIND SPEED:", 0);
+    osd_text(16, row + 3, best ? u : "OVER 8 FRAMES", best > 0);
     return 1;
 }
 
